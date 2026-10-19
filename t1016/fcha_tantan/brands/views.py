@@ -152,7 +152,7 @@ def list_context(request, saved_only=False):
                    saved_only=saved_only, page='saved' if saved_only else 'list')
     return context
 
-
+# @require_GET: 이 함수는 GET 요청으로만
 @require_GET
 def blist(request):
     return render(request, 'blist.html', list_context(request))
