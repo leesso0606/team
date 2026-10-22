@@ -1,0 +1,358 @@
+2026-10-22 데이터 정리
+
+1. cd C:\workspace\team\team-1\fcha_tantan_renewal
+python manage.py shell
+
+2. 한줄씩 입력
+
+import json
+from pathlib import Path
+from django.conf import settings
+
+file_path = Path(settings.BASE_DIR) / 'data' / 'brands2.json'
+
+with open(file_path, 'r', encoding='utf-8') as f:
+    brands = json.load(f)
+
+print('브랜드 개수:', len(brands))
+print('첫 번째 브랜드:', brands[0]['name'])
+print('카테고리:', brands[0]['category'])
+
+------------------------------------------------------------------------
+정상적이면
+
+브랜드 개수: 19
+첫 번째 브랜드: 교촌치킨
+카테고리: 치킨
+
+=====================================  json 파일 읽기 성공
+
+
+2. 데이터를 변경하지 않고 내용만 확인
+
+# 첫 번째 브랜드의 기본 항목 확인 : brands[0].keys() : 브랜드 기본 정보의 항목 확인
+print(brands[0].keys())
+
+dict_keys(['id', 'name', 'category', 'tagline', 'english_name', 'image', 'official_brand_id', 'company', 'source_category', 'source_category_major', 'priority_category', 'is_displayable', 'is_dummy', 'history', 'source_workbooks', 'store_snapshots', 'startup_cost_offers'])
+
+# 첫 번째 브랜드의 연도별 데이터 확인 : history[0].keys() : 매장 수, 매출, 폐점 수 등 연도별 통계 항목 확인
+print(brands[0]['history'][0].keys())
+
+dict_keys(['year', 'source_accounting_year', 'name', 'company', 'stores', 'direct_stores', 'total_stores', 'opened', 'closed', 'contract_ended', 'contract_terminated', 'ownership_changed', 'annual_sales_krw', 'monthly_sales_krw', 'annual_sales_per_3_3sqm_krw', 'annual_sales_status', 'startup_cost_krw', 'startup_cost_breakdown', 'national_reference', 'regions', 'quality_flags', 'source_ids'])
+
+# 첫 번째 브랜드의 연도 확인  :h['year'] : 해당 브랜드에 들어 있는 연도 확인
+print([h['year'] for h in brands[0]['history']])
+
+[2024, 2025, 2026]
+
+# 카테고리별 브랜드 개수 확인 : Counter() : 카페·치킨·편의점·미용실별 브랜드 개수 확인
+from collections import Counter
+print(Counter(b['category'] for b in brands))
+
+Counter({'치킨': 5, '카페': 5, '미용실': 5, '편의점': 4})
+
+=====================================================
+
+3. 기존 DB 상태 확인 : 실제 데이터를 넣기 전에 기존 더미데이터가 몇 개 있는지 확인
+
+
+from brands.models import Brand, AnnualStat, RegionalStat
+
+print('전체 브랜드:', Brand.objects.count())
+
+전체 브랜드: 8
+
+print('더미 브랜드:', Brand.objects.filter(is_demo=True).count())
+
+더미 브랜드: 8
+
+print('실제 브랜드:', Brand.objects.filter(is_demo=False).count())
+
+실제 브랜드: 0
+
+print('연도별 통계:', AnnualStat.objects.count())
+
+연도별 통계: 16
+
+print('지역별 통계:', RegionalStat.objects.count())
+
+지역별 통계: 272
+
+----------------------------------------------------------
+현재 Django DB에는 더미 브랜드 8개만 등록되어 있고, 실제 브랜드 19개는 아직 등록되지 않은 상태야.
+
+지역별 통계도 16 × 17 = 272개로 개수가 일치
+
+====================================
+
+4.기존 DB 백업하기
+
+exit()
+Copy-Item .\db.sqlite3 .\db_backup_before_real_data.sqlite3
+Test-Path .\db_backup_before_real_data.sqlite3
+
+True로 나오면 백업이 되어있음
+
+======================================
+
+5.models.py 확인하기
+
+우리가 확인한 brands2.json에는 다음과 같은 데이터가 들어 있어.
+JSON 		항목	의미		Django 모델
+
+name			브랜드명		Brand
+category		업종			Brand
+history		연도별 통계	AnnualStat
+stores			가맹점 수		AnnualStat
+opened		신규 개점 수	AnnualStat
+closed		폐점 수		AnnualStat
+annual_sales_krw	연평균 매출	AnnualStat
+regions		지역별 통계	RegionalStat
+
+
+ - 기존 모델과 실제 JSON 비교 결과
+모델			역할							확인 결과
+
+Brand		브랜드 이름, 업종, 이미지, 창업비용		기존 필드 활용 가능
+AnnualStat		연도별 매장 수, 개점·폐점 수, 매출		기존 필드 활용 가능
+RegionalStat	17개 시도별 가맹점 수				기존 필드 활용 가능
+AreaSales		평당 연평균 매출					기존 필드 활용 가능
+
+다만 실제 JSON에는 기존 모델에 없는 항목도 있어.
+예를 들어 direct_stores(직영점 수), monthly_sales_krw(월평균 매출), store_snapshots(지역별 매장 현황) 등
+
+
+========================================
+
+6. 실제 브랜드 ID 확인
+
+실제 브랜드 19개를 등록하려면 Brand 모델의 slug에 사용할 고유한 값이 필요
+PowerShell에서 다시 Django shell을 실행
+
+python manage.py shell
+
+import json
+from pathlib import Path
+from django.conf import settings
+
+file_path = Path(settings.BASE_DIR) / 'data' / 'brands2.json'
+
+with open(file_path, 'r', encoding='utf-8') as f:
+    brands = json.load(f)
+
+for brand in brands:
+    print(brand['id'], '|', brand['name'], '|', brand['category'])
+
+------------------------------------------
+
+chicken_20080600002 | 교촌치킨 | 치킨
+chicken_20080100655 | 비에이치씨(BHC) | 치킨
+chicken_20080200030 | 굽네치킨 | 치킨
+chicken_20161241 | 비비큐(BBQ) | 치킨
+chicken_20080200106 | 처갓집양념치킨 | 치킨
+coffee_20160628 | 메가엠지씨커피(MEGA MGC COFFEE) | 카페
+coffee_20141250 | 컴포즈커피(COMPOSE COFFEE) | 카페
+coffee_20080100014 | 이디야커피 | 카페
+coffee_20090100502 | 빽다방 | 카페
+coffee_20080100618 | 투썸플레이스 | 카페
+convenience_20080100020 | 씨유(CU) | 편의점
+convenience_20080100032 | GS25 | 편의점
+convenience_20080100064 | 세븐일레븐 | 편의점
+convenience_20080100729 | 이마트24(emart24) | 편의점
+beauty_20213321 | 에이바헤어 | 미용실
+beauty_20080100542 | 블루클럽 | 미용실
+beauty_20120100373 | XEO HAIR(제오헤어) | 미용실
+beauty_20160174 | 로이드밤 | 미용실
+beauty_20140109 | 토리헤어 | 미용실
+
+=====================================
+7. 브랜드 ID 중복 확인
+
+
+ids = [brand['id'] for brand in brands]
+
+print('전체 브랜드 수:', len(ids))
+전체 브랜드 수: 19
+
+print('고유 ID 수:', len(set(ids)))
+고유 ID 수: 19
+
+print('중복 ID:', [x for x in set(ids) if ids.count(x) > 1])
+중복 ID: []
+
+정상적으로 확인, 출력됨
+
+
+from brands.models import Brand
+print(
+    '기존 DB와 중복되는 ID:',
+    list(Brand.objects.filter(slug__in=ids).values_list('slug', flat=True))
+)
+기존 DB와 중복되는 ID: []
+---------------------------------------------------------------------------
+
+확인 항목			결과
+
+실제 브랜드 수		19개
+고유 브랜드 ID		19개
+JSON 내부 중복 ID	없음
+기존 DB와 중복 ID	없음
+DB 백업			완료
+
+이제 실제 데이터를 DB에 등록할 수 있는 상태야
+
+================================================
+
+8. 실제 브랜드 19개 등록하기
+
+from django.db import transaction
+from brands.models import Brand
+
+with transaction.atomic():
+    for brand in brands:
+        Brand.objects.update_or_create(
+            slug=brand['id'],
+            defaults={
+                'name': brand['name'],
+                'category': brand['category'],
+                'tagline': brand.get('tagline') or '',
+                'english_name': brand.get('english_name') or '',
+                'image': brand.get('image') or 'coffee.jpg',
+                'is_demo': False,
+            }
+        )
+
+코드 설명
+- transaction.atomic() : 등록 도중 오류가 발생하면 이번 작업의 변경 사항을 되돌려 줘.
+- for brand in brands : JSON에 있는 19개 브랜드를 하나씩 가져와.
+- update_or_create() : 같은 slug가 있으면 수정하고, 없으면 새로 등록해.
+- brand.get('tagline') or '' : 설명이 없으면 빈 문자열로 저장해.
+- is_demo: False : 실제 브랜드 데이터임을 표시해.
+
+--------------------------------------------------------------------------
+
+In [15]: print('전체 브랜드:', Brand.objects.count())
+전체 브랜드: 27
+
+In [16]: print('더미 브랜드:', Brand.objects.filter(is_demo=True).count())
+더미 브랜드: 8
+
+In [17]: print('실제 브랜드:', Brand.objects.filter(is_demo=False).count())
+실제 브랜드: 19
+
+실제 브랜드 19개가 Django DB에 등록됐어.
+
+
+===================================================
+
+
+9. 연도별 통계 데이터 확인하기
+
+AnnualStat 모델에 매장 수, 개점 수, 폐점 수, 연평균 매출을 등록할 차례
+그전에 JSON에 들어 있는 연도별 데이터가 몇 개인지 확인
+
+# 1. 전체 연도별 통계 개수
+total_history = sum(len(brand['history']) for brand in brands)
+
+print('전체 연도별 통계:', total_history)
+
+# 2. 연도별 데이터 개수
+from collections import Counter
+
+year_counts = Counter(
+    history['year']
+    for brand in brands
+    for history in brand['history']
+)
+
+print('연도별 데이터 개수:', year_counts)
+
+# 3. 첫 번째 브랜드의 통계 확인
+for history in brands[0]['history']:
+    print(
+        '연도:', history['year'],
+        '| 매장 수:', history.get('stores'),
+        '| 개점 수:', history.get('opened'),
+        '| 폐점 수:', history.get('closed'),
+        '| 연매출:', history.get('annual_sales_krw')
+    )
+
+-------------------------------------------------------
+# 1. 전체 연도별 통계 개수
+전체 연도별 통계: 48
+
+# 2. 연도별 데이터 개수
+연도별 데이터 개수: Counter({2024: 19, 2025: 19, 2026: 10})
+
+# 3. 첫 번째 브랜드의 통계 확인
+연도: 2024 | 매장 수: 1377 | 개점 수: 21 | 폐점 수: 9 | 연매출: 694300000
+연도: 2025 | 매장 수: 1361 | 개점 수: 12 | 폐점 수: 28 | 연매출: 727264000
+연도: 2026 | 매장 수: 1361 | 개점 수: 8 | 폐점 수: 8 | 연매출: 787680000
+---------------------------------------------------------------------------------
+확인하는 이유
+실제 데이터에 2024년, 2025년, 2026년이 모두 들어 있지만, 브랜드마다 데이터가 있는 연도가 다를 수 있기 때문이야.
+
+또한 매출이나 폐점 수가 null인 경우에는 임의로 0을 넣지 않고, 기존 모델의 null=True 설정을 활용
+
+
+====================================
+
+10.실제 연도별 통계 48개 등록하기
+
+AnnualStat 모델에 데이터를 저장
+
+from django.db import transaction
+from brands.models import Brand, AnnualStat
+
+with transaction.atomic():
+    for brand_data in brands:
+        brand = Brand.objects.get(slug=brand_data['id'])
+
+        for history in brand_data['history']:
+            AnnualStat.objects.update_or_create(
+                brand=brand,
+                year=history['year'],
+                defaults={
+                    'stores': history.get('stores'),
+                    'opened': history.get('opened'),
+                    'closed': history.get('closed'),
+                    'annual_sales_krw': history.get('annual_sales_krw'),
+                    'source_label': '브랜드별 수집 데이터',
+                    'source_url': '',
+                }
+            )
+
+코드 설명
+- Brand.objects.get() : 앞에서 등록한 실제 브랜드를 찾는 코드야.
+- for history in brand_data['history'] : 해당 브랜드의 2024~2026년 데이터를 하나씩 가져와.
+- AnnualStat.objects.update_or_create() : 브랜드와 연도가 같으면 수정하고, 없으면 새로 등록해.
+- history.get() : JSON 값이 null이면 Python의 None으로 저장해.
+- transaction.atomic() : 작업 중 오류가 발생하면 이번 저장 작업 전체를 되돌려 줘.
+source_label은 우선 임시로 표시하는 값이야. 나중에 실제 출처 정보를 연결할 거야.
+
+주의: JSON의 year와 source_accounting_year가 다를 수 있으므로, 현재는 JSON에 표시된 year를 기준으로 저장해. 원자료 기준 연도는 추후 출처 정리 시 별도로 확인
+
+
+print('전체 연도별 통계:', AnnualStat.objects.count())
+
+print(
+    '실제 브랜드 연도별 통계:',
+    AnnualStat.objects.filter(brand__is_demo=False).count()
+)
+
+print(
+    '더미 브랜드 연도별 통계:',
+    AnnualStat.objects.filter(brand__is_demo=True).count()
+)
+------------------------------------------------------------
+전체 연도별 통계: 64
+실제 브랜드 연도별 통계: 48
+더미 브랜드 연도별 통계: 16
+
+기존 더미데이터는 그대로 유지-> 실제 브랜드 19개의 연도별 통계 48개가 Django DB에 저장됐어
+
+================================
+
+11. 지역별 통계 구조 확인하기
+
+서울·경기·인천 등 17개 시도별 가맹점 수를 RegionalStat 모델에 저장할 차례

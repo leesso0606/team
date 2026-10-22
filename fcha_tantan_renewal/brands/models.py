@@ -1,7 +1,7 @@
 from django.db import models
 
 class Brand(models.Model):
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(unique=True) # SlugField는 기본적으로 영문 소문자, 숫자, 하이픈(-), 밑줄(_) 등을 사용가능
     name = models.CharField(max_length=100)
     category = models.CharField(max_length=30)
     tagline = models.CharField(max_length=200, blank=True)
