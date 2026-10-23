@@ -31,14 +31,20 @@
         <a href="#overview">브랜드 한눈에</a><a href="#trend">개·폐업 현황</a><a href="#distribution">지역별 매장</a><a href="#cost">창업비용</a><a href="#area-sales">평당 매출</a><a href="{% url 'brands:calculator' %}?brand={{ brand.slug }}&year={{ year }}">회수 계산기 ↗</a>
     </nav>
     <section class="section" id="overview">
-        <div class="section-head"><div><h2>숫자로 살펴보는 {{ brand.name }}</h2><p>{{ year }}년 · 전국 가맹점 기준</p></div>{% include 'includes/badge.html' %}</div>
+        <div class="section-head"><div><h2>숫자로 살펴보는 {{ brand.name }}</h2><p>{{ year }}년 · 전국 기준</p></div>{% include 'includes/badge.html' %}</div>
         <div class="metrics">
-            <article class="metric"><span class="label">연말 전체 매장</span><strong>{{ row.stores|number }}{% if row.stores != None %}<small>개</small>{% endif %}</strong><p>선택 연도 말 영업 매장 수</p></article>
-            <article class="metric"><span class="label">연간 신규 개업</span><strong class="up">{{ row.stat.opened|default_if_none:''|number }}{% if row.stat and row.stat.opened != None %}<small>개</small>{% endif %}</strong><p>선택 연도 내 신규 개업 합계</p></article>
-            <article class="metric"><span class="label">연간 폐업</span><strong>{{ row.stat.closed|default_if_none:''|number }}{% if row.stat and row.stat.closed != None %}<small>개</small>{% endif %}</strong><p>선택 연도 내 폐업 합계</p></article>
+            <article class="metric"><span class="label">연말 전체 매장</span><strong>{{ row.stores|number }}{% if row.stores != None %}<small>개</small>{% endif %}</strong><p>{{ year }}년에 등록된 매장 수</p></article>
+            <article class="metric"><span class="label">연간 신규 개업</span><strong class="up">{{ row.stat.opened|default_if_none:''|number }}{% if row.stat and row.stat.opened != None %}<small>개</small>{% endif %}</strong><p>{{ year }}년 신규 개업 합계</p></article>
+            <article class="metric"><span class="label">연간 폐업</span><strong>{{ row.stat.closed|default_if_none:''|number }}{% if row.stat and row.stat.closed != None %}<small>개</small>{% endif %}</strong><p>{{ year }}년 폐업 수</p></article>
             <article class="metric highlight"><span class="label">가맹점 평균 월 매출</span><strong>{{ row.monthly|number }}{% if row.monthly != None %}<small>만원</small>{% endif %}</strong><p>평균 연매출 ÷ 12 · 전국 기준</p></article>
         </div>
-        <div class="notice">{{ brand.description }}<br>※ 매출은 수익을 보장하지 않으며, 폐업 건수만으로 브랜드의 위험도를 판단할 수 없습니다.</div>
+        <div class="notice">{{ brand.description }}※ 매출은 수익을 보장하지 않으며, 폐업 건수만으로 브랜드의 위험도를 판단할 수 없습니다.
+            {% if row.stat %} {# 선택한 연도에 통계 데이터가 있을 때만 날짜를 표시한다는 뜻#}
+            <br>
+            선택 연도: {{ year }}년<br>
+            사이트 데이터 갱신일: {{ row.stat.updated_at|date:"Y-m-d" }}
+            {% endif %}
+        </div>
     </section>
     <div class="detail-grid">
         <section class="panel" id="trend">
@@ -68,8 +74,10 @@
     <div class="detail-grid" id="cost">
         <section class="panel">
             <h2>창업비용을 꼼꼼하게</h2><p class="subtitle">{{ brand.area_sqm }}㎡ 기준 · {% if brand.is_demo %}예시 {% endif %}견적 · 단위: 만원</p>
+            {% if year == 2024 or year == 2025 %}
+            <p class="data-note">출처: {{ cost_source }}</p>{% endif %}
             <div class="cost-list">{% for name,value in costs %}<div class="cost-line"><span>{{ name }}</span><b>{{ value|money }}</b></div>{% empty %}<p>비용 세부 항목 미제공</p>{% endfor %}</div>
-            <div class="cost-total"><span>{% if brand.is_demo %}예시 {% endif %}초기 비용 합계</span><strong>{{ brand.initial_cost_krw|money }}</strong></div>
+            <div class="cost-total"><span>{% if brand.is_demo %}예시 {% endif %}초기 비용 합계</span><strong>{{ cost_total|money }}</strong></div>
         </section>
         <section class="panel">
             <span class="eyebrow">CHECK BEFORE YOU START</span><h2>숫자 뒤의 조건도 살펴보세요</h2>

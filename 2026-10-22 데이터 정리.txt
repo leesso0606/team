@@ -356,3 +356,1760 @@ print(
 11. 지역별 통계 구조 확인하기
 
 서울·경기·인천 등 17개 시도별 가맹점 수를 RegionalStat 모델에 저장할 차례
+
+
+# 지역 목록 확인
+
+In [3]: regions = brands[0]['history'][0]['regions']
+   ...: 
+   ...: print('지역 개수:', len(regions))
+   ...: print('지역 목록:', list(regions.keys()))
+지역 개수: 17
+지역 목록: ['서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종', '경기', '강원', '충북', '충남', '전북', '전남', '경북', '경남', '제주']
+
+
+# 서울 지역 데이터 확인 : stores(가맹점 수), direct_stores(직영점 수) 등이 어떻게 저장되어 있는지 확인
+
+In [4]: print('서울 지역 데이터:', regions['서울'])
+서울 지역 데이터: {'stores': 227, 'direct_stores': 1, 'total_stores': 228, 'annual_sales_krw': None, 'annual_sales_min_krw': 840000000, 'annual_sales_max_krw': 940000000, 'monthly_sales_min_krw': 70000000, 'monthly_sales_max_krw': 78333333, 'annual_sales_per_3_3sqm_min_krw': 34000000, 'annual_sales_per_3_3sqm_max_krw': 38000000, 'sales_status': 'range', 'is_dummy': False, 'source_sales_range': '840000~940000', 'source_sales_per_3_3sqm_range': '34000~38000'}
+
+
+# 전체 지역 데이터 개수 확인 : 48개의 연도별 통계에 각각 지역 정보가 몇 개 들어 있는지 확인
+In [5]: from collections import Counter
+   ...: 
+   ...: region_counts = Counter(
+   ...:     len(history.get('regions') or {})
+   ...:     for brand in brands
+   ...:     for history in brand['history']
+   ...: )
+   ...: 
+   ...: print('지역 데이터 개수 분포:', region_counts)
+지역 데이터 개수 분포: Counter({17: 39, 2: 5, 0: 4})
+
+
+---------------------------------------------------
+
+지역 데이터 개수	연도별 통계 수	의미
+17개 지역	39개		전국 17개 시도 데이터 존재
+2개 지역		5개		일부 지역 데이터만 존재
+0개 지역		4개		지역별 데이터 없음
+합계		48개		전체 연도별 통계
+
+즉, 48개 통계 모두에 17개 지역 데이터가 있는 것은 아니야.
+
+따라서 지역 정보가 없는 연도에 임의로 매장 수 0을 입력하면 안 돼.
+
+또한 서울 지역 데이터를 보면 다음과 같아.
+
+{
+    'stores': 227,
+    'direct_stores': 1,
+    'total_stores': 228,
+    'annual_sales_krw': None
+}
+
+stores는 가맹점 수 227개이고, total_stores는 직영점까지 포함한 228개야.
+
+현재 RegionalStat 모델에는 stores 필드만 있으므로 가맹점 수 227개를 저장할 거야.
+
+
+==============================================
+
+12. 실제 지역별 통계 DB 등록
+
+from django.db import transaction
+from brands.models import Brand, AnnualStat, RegionalStat
+
+with transaction.atomic():
+    for brand_data in brands:
+        brand = Brand.objects.get(slug=brand_data['id'])
+
+        for history in brand_data['history']:
+            annual_stat = AnnualStat.objects.get(
+                brand=brand,
+                year=history['year']
+            )
+
+            regions = history.get('regions') or {}
+
+            for region_name, region_data in regions.items():
+                RegionalStat.objects.update_or_create(
+                    annual_stat=annual_stat,
+                    region=region_name,
+                    defaults={
+                        'stores': region_data.get('stores')
+                    }
+                )
+
+
+코드			역할
+transaction.atomic()	오류 발생 시 이번 저장 작업을 되돌림
+Brand.objects.get()		실제 브랜드 조회
+AnnualStat.objects.get()	해당 브랜드의 연도별 통계 조회
+history.get('regions') or {}	지역 데이터가 없으면 빈 딕셔너리 사용
+regions.items()		지역명과 지역 데이터를 하나씩 가져옴
+update_or_create()		기존 데이터가 있으면 수정, 없으면 생성
+region_data.get('stores')	해당 지역의 가맹점 수 저장
+
+기존 더미 브랜드 8개와 통계는 삭제하지 않아.
+
+In [5]: from collections import Counter
+   ...: 
+   ...: region_counts = Counter(
+   ...:     len(history.get('regions') or {})
+   ...:     for brand in brands
+   ...:     for history in brand['history']
+   ...: )
+   ...: 
+   ...: print('지역 데이터 개수 분포:', region_counts)
+지역 데이터 개수 분포: Counter({17: 39, 2: 5, 0: 4})
+
+   ...:                 year=history['year']
+   ...:             )
+   ...: 
+   ...:             regions = history.get('regions') or {}
+   ...: 
+   ...:             for region_name, region_data in regions.items():
+   ...:                 RegionalStat.objects.update_or_create(
+   ...:                     annual_stat=annual_stat,
+   ...:                     region=region_name,
+   ...:                     defaults={
+   ...:                         'stores': region_data.get('stores')
+   ...:                     }
+   ...:                 )
+   ...: 
+
+   ...: 
+   ...: print(
+   ...:     '실제 브랜드 지역별 통계:',
+   ...:     RegionalStat.objects.filter(
+   ...:         annual_stat__brand__is_demo=False
+   ...:     ).count()
+   ...: )
+   ...: 
+   ...: print(
+   ...:     '더미 브랜드 지역별 통계:',
+   ...:     RegionalStat.objects.filter(
+   ...:         annual_stat__brand__is_demo=True
+   ...:     ).count()
+   ...: )
+전체 지역별 통계: 945
+실제 브랜드 지역별 통계: 673
+더미 브랜드 지역별 통계: 272
+
+이제 실제 브랜드 19개의 기본 정보, 연도별 통계 48개, 지역별 통계 673개가 DB에 저장된 상태
+
+==========================================
+
+13. 실제 지역별 데이터 검증하기
+
+from brands.models import Brand, AnnualStat, RegionalStat
+
+# 교촌치킨의 2024년 통계 조회
+   ...: annual = AnnualStat.objects.get(brand=brand, year=2024)
+   ...: 
+   ...: # 서울 지역 통계 조회
+   ...: seoul = RegionalStat.objects.get(
+   ...:     annual_stat=annual,
+   ...:     region='서울'
+   ...: )
+   ...: 
+   ...: print('브랜드:', brand.name)
+   ...: print('연도:', annual.year)
+   ...: print('전국 가맹점 수:', annual.stores)
+   ...: print('서울 가맹점 수:', seoul.stores)
+브랜드: 교촌치킨
+연도: 2024
+전국 가맹점 수: 1377
+서울 가맹점 수: 227
+
+In [9]: 
+
+   ...: 
+   ...: # 교촌치킨의 2024년 통계 조회
+   ...: annual = AnnualStat.objects.get(brand=brand, year=2024)
+   ...: 
+   ...: # 서울 지역 통계 조회
+   ...: seoul = RegionalStat.objects.get(
+   ...:     annual_stat=annual,
+   ...:     region='서울'
+   ...: )
+   ...: 
+   ...: print('브랜드:', brand.name)
+   ...: print('연도:', annual.year)
+   ...: print('전국 가맹점 수:', annual.stores)
+   ...: print('서울 가맹점 수:', seoul.stores)
+브랜드: 교촌치킨
+연도: 2024
+전국 가맹점 수: 1377
+서울 가맹점 수: 227
+
+왜 이걸 확인할까?
+앞에서 확인한 원본 JSON의 값과 DB에 저장된 값을 비교하기 위해서야.
+- 전국 가맹점 수: 1,377개
+- 서울 가맹점 수: 227개
+- 서울 직영점 수: 1개 (현재 모델에는 별도로 저장하지 않음)
+또한 매출처럼 원본에 null인 값은 임의로 0으로 바꾸지 않았는지도 이후에 확인할 거야.
+
+
+==================================================
+
+14. 창업비용 데이터 구조 확인하기
+다음은 brands2.json에 있는 창업비용을 Django DB에 연결할 차례
+
+# 교촌치킨 연도별 창업비용 확인
+In [10]: for history in brands[0]['history']:
+    ...:     print(
+    ...:         '연도:', history['year'],
+    ...:         '| 창업비용:', history.get('startup_cost_krw')
+    ...:     )
+    ...: 
+연도: 2024 | 창업비용: 131006000
+연도: 2025 | 창업비용: 130491000
+연도: 2026 | 창업비용: None
+
+# 창업비용 세부 항목 확인
+print(brands[0]['history'][0].get('startup_cost_breakdown'))
+{'franchise_fee_krw': 6765000, 'education_fee_krw': 3550000, 'guarantee_deposit_krw': 1500000, 'other_cost_krw': 119191000}
+
+# 별도 창업비용 자료 확인
+print(brands[0].get('startup_cost_offers'))
+[{'variant': 'default', 'source_id': '치킨/교촌치킨_창업정보.xlsx#창업비용', 'year': None, 'collected_year': 2026, 'startup_cost_krw': 156530000, 'startup_cost_breakdown': {'franchise_fee_krw': 6760000, 'education_fee_krw': 3900000, 'guarantee_deposit_krw': 10000000, 'interior_cost_krw': 69000000, 'equipment_cost_krw': None, 'other_cost_krw': 66860000}, 'note': '비용 적용연도 미확인. 연도별 공시비용에 강제 덮어쓰기하지 않음. 매장유형·면적·VAT·별도공사는 원문 비고 참조', 'source_rows': [{'항목': '가맹비', '금액(만원)': 676, '금액(원)': 6760000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '교육비', '금액(만원)': 390, '금액(원)': 3900000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '인테리어', '금액(만원)': 6900, '금액(원)': 69000000, '비고': '66㎡(20평) 기준', '근거': '사용자 제공 이미지 #4'}, {'항목': '보증금', '금액(만원)': 1000, '금액(원)': 10000000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '기타', '금액(만원)': 6686, '금액(원)': 66860000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '전체(표시값)', '금액(만원)': 15653, '금액(원)': 156530000, '비고': '세부 합계와 1만원 차이', '근거': '사용자 제공 이미지 #4'}, {'항목': '세부 항목 합계(계산)', '금액(만원)': 15652, '금액(원)': 156520000, '비고': '676 + 390 + 6900 + 1000 + 6686', '근거': '사용자 제공 이미지 #4'}, {'항목': '표시 전체 - 세부 합계', '금액(만원)': 1, '금액(원)': 10000, '비고': '원본 값을 그대로 보존. 차이 원인 미확인', '근거': '사용자 제공 이미지 #4'}], 'itemized_total_krw': 156520000}]
+
+
+이렇게 확인하는 이유는 2024년 창업비용과 2025년 창업비용이 다를 수 있기 때문이야.
+
+또한 startup_cost_offers는 별도로 수집한 자료이므로 연도별 공시 비용과 무조건 동일하게 취급하면 안 돼.
+
+1. 교촌치킨 창업비용 확인 결과
+자료			창업비용
+2024년 연도별 자료	131,006,000원
+2025년 연도별 자료	130,491,000원
+2026년 연도별 자료	None
+별도 수집 창업정보		156,530,000원
+
+별도 수집 자료는 2026년에 수집했지만 실제 비용 적용연도는 확인되지 않았어. 따라서 이를 2026년 창업비용으로 취급하면 안 돼.
+
+또한 별도 자료의 표시 총액과 세부 항목 합계에 10,000원 차이가 있어. 이 차이도 임의로 수정하지 않을 거야.
+
+
+==========================================
+
+15. 19개 브랜드의 창업비용 현황 확인
+다른 브랜드들도 교촌치킨처럼 2025년 자료가 있는지 먼저 확인
+연도가 확인된 창업비용만 출력
+
+for brand in brands:
+    ...:     costs = [
+    ...:         (h['year'], h.get('startup_cost_krw'))
+    ...:         for h in brand['history']
+    ...:         if h.get('startup_cost_krw') is not None
+    ...:     ]
+    ...: 
+    ...:     print(brand['name'], '|', costs)
+    ...: 
+교촌치킨 | [(2024, 131006000), (2025, 130491000)]
+비에이치씨(BHC) | [(2024, 90027000), (2025, 90027000)]
+굽네치킨 | [(2024, 92455000), (2025, 83270000)]
+비비큐(BBQ) | [(2024, 90789000), (2025, 90789000)]
+처갓집양념치킨 | [(2024, 26850000), (2025, 29050000)]
+메가엠지씨커피(MEGA MGC COFFEE) | [(2024, 74226000), (2025, 78474000), (2026, 80138000)]
+컴포즈커피(COMPOSE COFFEE) | [(2024, 95232000), (2025, 83482000)]
+이디야커피 | [(2024, 127890000), (2025, 132320000)]
+빽다방 | [(2024, 76872000), (2025, 73072000)]
+투썸플레이스 | [(2024, 309800000), (2025, 309800000)]
+씨유(CU) | [(2024, 72700000), (2025, 74229000)]
+GS25 | [(2024, 72700000), (2025, 72700000)]
+세븐일레븐 | [(2024, 72700000), (2025, 74015000)]
+이마트24(emart24) | [(2024, 145670000), (2025, 74200000)]
+에이바헤어 | [(2024, 81400000), (2025, 81400000), (2026, 83600000)]
+블루클럽 | [(2024, 59380000), (2025, 59380000), (2026, 59380000)]
+XEO HAIR(제오헤어) | [(2024, 166470000), (2025, 166470000), (2026, 166470000)]
+로이드밤 | [(2024, 136400000), (2025, 136400000), (2026, 129800000)]
+토리헤어 | [(2024, 223900000), (2025, 223900000), (2026, 223900000)]
+
+
+19개 브랜드 모두 창업비용 데이터가 있고, 브랜드마다 가장 최근에 확인된 연도가 다르다는 것도 알 수 있어.
+
+1. 창업비용 데이터 확인 결과
+구분				브랜드 수
+2026년 창업비용까지 있는 브랜드	6개
+2025년 창업비용까지 있는 브랜드	13개
+창업비용이 전혀 없는 브랜드		0개
+전체				19개
+
+따라서 Brand.initial_cost_krw에는 각 브랜드에서 연도가 확인된 가장 최근 창업비용을 저장하면 돼.
+
+단, 이 금액들은 서로 다른 기준연도의 자료이므로 사이트에서 비교할 때 기준연도를 함께 표시
+
+
+========================================
+
+16. 실제 창업비용 DB 등록하기
+
+from django.db import transaction
+from brands.models import Brand
+
+with transaction.atomic():
+    for brand_data in brands:
+
+        # 창업비용이 있는 연도별 자료만 가져오기
+        valid_history = [
+            h for h in brand_data['history']
+            if h.get('startup_cost_krw') is not None
+        ]
+
+        # 가장 최근 연도 선택
+        latest = max(
+            valid_history,
+            key=lambda h: h['year'],
+            default=None
+        )
+
+        # DB에서 실제 브랜드 조회
+        brand = Brand.objects.get(
+            slug=brand_data['id'],
+            is_demo=False
+        )
+
+        if latest is not None:
+            brand.initial_cost_krw = latest['startup_cost_krw']
+
+            brand.costs = {
+                'year': latest['year'],
+                'startup_cost_breakdown': (
+                    latest.get('startup_cost_breakdown') or {}
+                ),
+                'history': [
+                    {
+                        'year': h['year'],
+                        'startup_cost_krw': h.get('startup_cost_krw'),
+                        'startup_cost_breakdown': (
+                            h.get('startup_cost_breakdown') or {}
+                        )
+                    }
+                    for h in brand_data['history']
+                ],
+                'startup_cost_offers': (
+                    brand_data.get('startup_cost_offers') or []
+                )
+            }
+
+            brand.save(
+                update_fields=['initial_cost_krw', 'costs']
+            )
+
+
+코드 설명
+- valid_history : 창업비용이 None이 아닌 연도별 자료만 가져와.
+- max(..., key=lambda h: h['year']) : 가장 최근 연도의 비용을 선택해.
+- initial_cost_krw : 사이트에서 대표적으로 표시할 창업비용을 저장해.
+- costs : 연도별 비용과 세부 항목, 별도 수집 자료를 JSON 형태로 보존해.
+- transaction.atomic() : 저장 중 오류가 발생하면 이번 작업 전체를 취소해.
+주의: 별도 수집 자료인 startup_cost_offers는 보관만 하고, 대표 창업비용을 덮어쓰지 않아.
+
+
+print(
+    ...:     '창업비용 등록 브랜드:',
+    ...:     Brand.objects.filter(
+    ...:         is_demo=False,
+    ...:         initial_cost_krw__isnull=False
+    ...:     ).count()
+    ...: )
+    ...: 
+    ...: brand = Brand.objects.get(slug='chicken_20080600002')
+    ...: 
+    ...: print('브랜드:', brand.name)
+    ...: print('대표 창업비용:', brand.initial_cost_krw)
+    ...: print('기준연도:', brand.costs.get('year'))
+창업비용 등록 브랜드: 19
+브랜드: 교촌치킨
+대표 창업비용: 130491000
+기준연도: 2025
+
+실제 브랜드 19개의 창업비용까지 DB에 저장된 상태
+
+
+=====================================
+
+17. 평당 연평균 매출 데이터 확인하기 : AreaSales 모델에 평당 연평균 매출을 연결할 차례
+
+brands2.json 에는 annual_sales_per_3_3sqm_krw 항목이 있음 
+3.3㎡당 연평균 매출을 뜻하며, 일반적으로 말하는 평당 매출과 거의 같은 기준
+다만 원본에 정확한 값 대신 최솟값·최댓값만 있는 경우도 있으므로 먼저 확인
+
+① 브랜드별 평당 매출 확인
+
+In [16]: for brand in brands:
+    ...:     print('\n브랜드:', brand['name'])
+    ...: 
+    ...:     for history in brand['history']:
+    ...:         print(
+    ...:             '연도:', history['year'],
+    ...:             '| 평당 연매출:',
+    ...:             history.get('annual_sales_per_3_3sqm_krw')
+    ...:         )
+    ...: 
+
+브랜드: 교촌치킨
+연도: 2024 | 평당 연매출: 31830000
+연도: 2025 | 평당 연매출: 33068000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 비에이치씨(BHC)
+연도: 2024 | 평당 연매출: 27276000
+연도: 2025 | 평당 연매출: 26801000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 굽네치킨
+연도: 2024 | 평당 연매출: 27188000
+연도: 2025 | 평당 연매출: 27464000
+
+브랜드: 비비큐(BBQ)
+연도: 2024 | 평당 연매출: 32605000
+연도: 2025 | 평당 연매출: 32411000
+
+브랜드: 처갓집양념치킨
+연도: 2024 | 평당 연매출: 21349000
+연도: 2025 | 평당 연매출: 22500000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 메가엠지씨커피(MEGA MGC COFFEE)
+연도: 2024 | 평당 연매출: 20908000
+연도: 2025 | 평당 연매출: 22410000
+연도: 2026 | 평당 연매출: 23688000
+
+브랜드: 컴포즈커피(COMPOSE COFFEE)
+연도: 2024 | 평당 연매출: 26002000
+연도: 2025 | 평당 연매출: 18030000
+
+브랜드: 이디야커피
+연도: 2024 | 평당 연매출: 6447000
+연도: 2025 | 평당 연매출: 6330000
+
+브랜드: 빽다방
+연도: 2024 | 평당 연매출: 21360000
+연도: 2025 | 평당 연매출: 20517000
+
+브랜드: 투썸플레이스
+연도: 2024 | 평당 연매출: 8949000
+연도: 2025 | 평당 연매출: 10051000
+
+브랜드: 씨유(CU)
+연도: 2024 | 평당 연매출: 26579000
+연도: 2025 | 평당 연매출: 26455000
+
+브랜드: GS25
+연도: 2024 | 평당 연매출: 27991000
+연도: 2025 | 평당 연매출: 27568000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 세븐일레븐
+연도: 2024 | 평당 연매출: 22089000
+연도: 2025 | 평당 연매출: 22245000
+
+브랜드: 이마트24(emart24)
+연도: 2024 | 평당 연매출: 21900000
+연도: 2025 | 평당 연매출: 21889000
+
+브랜드: 에이바헤어
+연도: 2024 | 평당 연매출: 10160000
+연도: 2025 | 평당 연매출: 8687000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 블루클럽
+연도: 2024 | 평당 연매출: 4899000
+연도: 2025 | 평당 연매출: 7615000
+연도: 2026 | 평당 연매출: None
+
+브랜드: XEO HAIR(제오헤어)
+연도: 2024 | 평당 연매출: 10935000
+연도: 2025 | 평당 연매출: 10948000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 로이드밤
+연도: 2024 | 평당 연매출: 8952000
+연도: 2025 | 평당 연매출: 7982000
+연도: 2026 | 평당 연매출: None
+
+브랜드: 토리헤어
+연도: 2024 | 평당 연매출: 5029000
+연도: 2025 | 평당 연매출: 4940000
+연도: 2026 | 평당 연매출: None
+
+
+② 평당 매출이 있는 데이터 개수 확인
+
+In [17]: total = sum(
+    ...:     1
+    ...:     for brand in brands
+    ...:     for history in brand['history']
+    ...:     if history.get('annual_sales_per_3_3sqm_krw') is not None
+    ...: )
+    ...: 
+    ...: print('평당 매출 데이터 개수:', total)
+평당 매출 데이터 개수: 39
+
+③ 매출 상태 확인
+
+from collections import Counter
+    ...: 
+    ...: statuses = Counter(
+    ...:     history.get('annual_sales_status')
+    ...:     for brand in brands
+    ...:     for history in brand['history']
+    ...: )
+    ...: 
+    ...: print('매출 데이터 상태:', statuses)
+매출 데이터 상태: Counter({'reported': 39, 'reported_from_monthly': 8, None: 1})
+
+1. 확인 결과
+항목				결과
+전체 브랜드			19개
+전체 연도별 통계			48개
+평당 연평균 매출이 있는 데이터	39개
+평당 연평균 매출이 없는 데이터	9개
+
+매출 상태도 확인됐어.
+매출 상태			개수	의미
+reported			39개	보고된 매출
+reported_from_monthly	8개	월매출 기반으로 산출된 매출
+None			1개	상태 정보 없음
+
+여기서 주의할 점은 annual_sales_status가 전체 연매출의 상태라는 거야. 따라서 평당 매출 39개와 상태별 39개가 일치한다고 해서 두 값이 완전히 같은 의미인 것은 아니야.
+
+
+===========================================
+
+18.평당 연평균 매출 DB 등록하기
+
+AreaSales 모델->  annual_sales_per_pyeong_krw 에 boards2.json의 annual_sales_per_3_3sqm_krw를 이 필드에 저장할 거야. 정확하게는 3.3㎡당 매출이므로 화면에서도 그 기준을 표시하는 것이 좋음.
+
+
+from django.db import transaction
+from brands.models import Brand, AnnualStat, AreaSales
+
+with transaction.atomic():
+
+    for brand_data in brands:
+
+        brand = Brand.objects.get(
+            slug=brand_data['id'],
+            is_demo=False
+        )
+
+        for history in brand_data['history']:
+
+            sales = history.get(
+                'annual_sales_per_3_3sqm_krw'
+            )
+
+            # 평당 매출 데이터가 없는 경우 건너뛰기
+            if sales is None:
+                continue
+
+            annual = AnnualStat.objects.get(
+                brand=brand,
+                year=history['year']
+            )
+
+            AreaSales.objects.update_or_create(
+                annual_stat=annual,
+                defaults={
+                    'annual_sales_per_pyeong_krw': sales,
+                    'source_label': '브랜드별 수집 데이터 (3.3㎡당 연매출)',
+                    'source_url': ''
+                }
+            )
+
+- sales : JSON에서 3.3㎡당 연평균 매출을 가져와.
+- if sales is None : 매출 데이터가 없으면 저장하지 않아.
+- AnnualStat.objects.get() : 해당 브랜드와 연도의 통계를 찾아.
+- AreaSales.objects.update_or_create() : 기존 데이터가 있으면 수정하고 없으면 생성해.
+- transaction.atomic() : 오류가 발생하면 이번 등록 작업 전체를 취소해.
+source_label은 임시 출처명이야. 나중에 원본 자료의 출처 정보를 더 정확하게 연결할 수 있어.
+
+
+===========================================
+
+19. 등록 결과 확인하기
+
+print(
+    '실제 브랜드 평당 매출:',
+    AreaSales.objects.filter(
+        annual_stat__brand__is_demo=False
+    ).count()
+)
+
+brand = Brand.objects.get(
+    slug='chicken_20080600002'
+)
+
+annual = AnnualStat.objects.get(
+    brand=brand,
+    year=2025
+)
+
+area = AreaSales.objects.get(
+    annual_stat=annual
+)
+
+print('브랜드:', brand.name)
+print('연도:', annual.year)
+print('3.3㎡당 연평균 매출:', area.annual_sales_per_pyeong_krw)
+
+실제 브랜드 평당 매출: 39
+브랜드: 교촌치킨
+연도: 2025
+3.3㎡당 연평균 매출: 33068000
+
+******************************************************************************
+현재까지 완료한 작업
+데이터			등록 결과
+실제 브랜드		19개
+연도별 통계		48개
+지역별 통계		673개
+창업비용			19개 브랜드
+3.3㎡당 연평균 매출	39개
+기존 더미데이터		유지 중
+
+이제 실제 데이터의 주요 항목은 DB에 등록된 상태야.
+
+다만 아직 기존 더미데이터가 남아 있고, board2.JSON의 모든 세부 항목을 DB에 옮긴 것은 아니야.
+
+
+===========================================================
+
+20. 더미데이터 삭제 전 전체 DB 확인
+
+from brands.models import Brand, AnnualStat, RegionalStat, AreaSales
+
+print('=== 브랜드 ===')
+print('전체:', Brand.objects.count())
+print('실제:', Brand.objects.filter(is_demo=False).count())
+print('더미:', Brand.objects.filter(is_demo=True).count())
+
+print('\n=== 연도별 통계 ===')
+print('전체:', AnnualStat.objects.count())
+print('실제:', AnnualStat.objects.filter(brand__is_demo=False).count())
+print('더미:', AnnualStat.objects.filter(brand__is_demo=True).count())
+
+print('\n=== 지역별 통계 ===')
+print('전체:', RegionalStat.objects.count())
+print('실제:', RegionalStat.objects.filter(annual_stat__brand__is_demo=False).count())
+print('더미:', RegionalStat.objects.filter(annual_stat__brand__is_demo=True).count())
+
+print('\n=== 평당 매출 ===')
+print('전체:', AreaSales.objects.count())
+print('실제:', AreaSales.objects.filter(annual_stat__brand__is_demo=False).count())
+print('더미:', AreaSales.objects.filter(annual_stat__brand__is_demo=True).count())
+
+=== 브랜드 ===
+전체: 27
+실제: 19
+더미: 8
+
+=== 연도별 통계 ===
+전체: 64
+실제: 48
+더미: 16
+
+=== 지역별 통계 ===
+전체: 945
+실제: 673
+더미: 272
+
+=== 평당 매출 ===
+전체: 39
+실제: 39
+더미: 0
+
+1. 현재 DB 최종 확인 결과
+데이터		전체	실제 데이터	더미데이터
+브랜드		27개	19개		8개
+연도별 통계	64개	48개		16개
+지역별 통계	945개	673개		272개
+평당 연평균 매출	39개	39개		0개
+
+특히 평당 매출에는 더미데이터가 없고, 실제 데이터만 39개 등록되어 있다는 것도 확인
+
+
+============================================
+
+21. 더미데이터 삭제 전 DB 백업 : 더미데이터를 삭제하면 연결된 연도별·지역별 통계도 함께 삭제될 수 있음
+
+
+# 이 코드는 아직 백업을 실행하지 않고, 백업할 파일의 위치만 확인하는 코드
+SQLite DB를 안전하게 백업하려면 다음 단계에서 SQLite의 백업 기능을 사용
+
+from pathlib import Path
+from django.conf import settings
+from shutil import copy2
+from datetime import datetime
+
+db_path = Path(settings.DATABASES['default']['NAME'])
+
+backup_path = db_path.with_name(
+    'db_backup_before_demo_delete_'
+    + datetime.now().strftime('%Y%m%d_%H%M%S')
+    + '.sqlite3'
+)
+
+print('원본 DB:', db_path)
+print('백업 경로:', backup_path)
+
+원본 DB: C:\workspce\team\fcha_tantan_renewal\db.sqlite3
+백업 경로: C:\workspce\team\fcha_tantan_renewal\db_backup_before_demo_delete_20261023_173130.sqlite3
+
+==========================================
+
+22. SQLite DB 실제 백업하기
+
+import sqlite3
+
+# 원본 DB 연결
+source = sqlite3.connect(str(db_path))
+
+# 백업 DB 연결
+destination = sqlite3.connect(str(backup_path))
+
+try:
+    # SQLite 백업 기능 실행
+    source.backup(destination)
+finally:
+    destination.close()
+    source.close()
+
+print('백업 완료!')
+print('백업 파일:', backup_path)
+print('백업 파일 존재:', backup_path.exists())
+print('백업 파일 크기:', backup_path.stat().st_size, 'bytes')
+
+코드 설명
+- sqlite3.connect() : 원본 DB와 백업 DB를 연결해.
+- source.backup(destination) : 원본 SQLite 데이터를 백업 파일로 복사해.
+- finally : 백업 성공 여부와 관계없이 연결을 종료해.
+- backup_path.exists() : 백업 파일이 실제로 생성됐는지 확인해.
+- backup_path.stat().st_size : 백업 파일 크기를 확인해.
+
+
+백업 완료!
+백업 파일: C:\workspce\team\fcha_tantan_renewal\db_backup_before_demo_delete_20261023_173130.sqlite3
+백업 파일 존재: True
+백업 파일 크기: 307200 bytes
+
+확인 항목		결과
+백업 파일 생성	성공
+파일 존재 여부	True
+파일 크기		307,200 bytes (약 300KB)
+백업 위치		fcha_tantan_renewal 프로젝트 폴더
+
+이제 더미데이터를 삭제하기 전에 백업 파일에 실제 데이터가 들어 있는지 확인
+
+import sqlite3
+
+conn = sqlite3.connect(str(backup_path))
+
+try:
+    result = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    print('DB 무결성 검사:', result)
+
+    tables = [
+        'brands_brand',
+        'brands_annualstat',
+        'brands_regionalstat',
+        'brands_areasales'
+    ]
+
+    for table in tables:
+        count = conn.execute(
+            f'SELECT COUNT(*) FROM {table}'
+        ).fetchone()[0]
+
+        print(table, ':', count)
+
+finally:
+    conn.close()
+
+DB 무결성 검사: ok
+brands_brand : 27
+brands_annualstat : 64
+brands_regionalstat : 945
+brands_areasales : 39
+
+데이터		백업 DB	확인 결과
+브랜드		27개	정상
+연도별 통계	64개	정상
+지역별 통계	945개	정상
+평당 매출		39개	정상
+DB 무결성	ok	정상
+
+=========================================
+
+24. 삭제할 더미 브랜드 확인하기 : 삭제하기 전에 어떤 브랜드 8개가 삭제 대상인지 먼저 확인
+
+ from brands.models import Brand
+    ...: 
+    ...: demo_brands = Brand.objects.filter(is_demo=True)
+    ...: 
+    ...: print('삭제 대상 브랜드 수:', demo_brands.count())
+    ...: 
+    ...: for brand in demo_brands:
+    ...:     print(
+    ...:         'ID:', brand.id,
+    ...:         '| 브랜드:', brand.name,
+    ...:         '| slug:', brand.slug
+    ...:     )
+    ...: 
+삭제 대상 브랜드 수: 8
+ID: 1 | 브랜드: 탄탄커피 | slug: tantan
+ID: 2 | 브랜드: 모닝브루 | slug: morning
+ID: 3 | 브랜드: 탄탄치킨 | slug: may
+ID: 4 | 브랜드: 바삭한날 | slug: grain
+ID: 5 | 브랜드: 탄탄24 | slug: forest
+ID: 6 | 브랜드: 데이마켓 | slug: day
+ID: 7 | 브랜드: 살롱탄탄 | slug: butter
+ID: 8 | 브랜드: 온유헤어 | slug: soft
+
+이 8개는 기존 테스트용 브랜드이고, 새로 등록한 실제 브랜드 19개와는 별도 레코드 -> 삭제가능
+
+하지만 혹시 몰라서 더미 데이터 삭제는 안함. 
+db.sqlite3            ← 실제 데이터 + 더미데이터 저장
+brands/models.py에 있는 is_demo 필드로 두 데이터를 구분
+
+# 더미데이터만 확인하는 방법 : Django Python 셸에서 다음 코드를 실행
+from brands.models import Brand
+
+Brand.objects.filter(is_demo=True)
+
+# 실제 브랜드만 확인 하는 방법 : Django Python 셸에서 다음 코드를 실행
+Brand.objects.filter(is_demo=False)
+*****************************************************
+실제 브랜드 19개: 사이트에 연결
+더미 브랜드 8개: DB에 보관하고 삭제하지 않음
+기존 DB 백업: 완료
+
+사이트가 실제 브랜드 19개를 사용하도록 연결하는 작업진행
+
+=================================
+
+
+25. 현재 사이트의 브랜드 조회 코드 확인하기
+fcha_tantan_renewal\home\views.py 확인
+
+현재 home/views.py는 브랜드 데이터를 직접 조회하지 않고
+대신 아래 코드로 brands/views.py의 list_context() 함수를 호출
+
+동작 순서는 다음과 같아.
+1. 사용자가 메인 페이지에 접속
+2. home/views.py의 index() 실행
+3. brands/views.py의 list_context() 호출
+4. list_context()에서 가져온 데이터를 index.html에 전달
+따라서 실제 브랜드 19개가 표시되는지 확인하려면 list_context()를 살펴봐야 해.
+
+지금 home/views.py는 수정하지 않아도 돼.
+
+
+=========================================
+
+26. 브랜드 데이터 조회 부분 확인
+
+brands\views.py 에서 함수 def list_context(request): 확인
+
+기존 사이트 기능은 유지하면서 다음 조건이 적용되어 있는지 확인해 줄게.
+- 실제 브랜드 19개만 사이트에 표시
+- 더미 브랜드 8개는 DB에 그대로 보관
+- 브랜드 비교와 상세보기에도 실제 데이터 사용
+
+1. 확인결과
+
+rows = []
+
+for brand in context['all_brands']:
+
+이 코드는 context['all_brands']에 들어 있는 브랜드를 하나씩 가져와서 목록을 만들고 있음
+
+즉, 다음 두 가지 경우가 가능해.
+all_brands에 저장된 데이터		사이트에 표시되는 브랜드
+Brand.objects.all()			실제 19개 + 더미 8개
+Brand.objects.filter(is_demo=False)	실제 브랜드 19개만
+
+현재 list_context()에는 is_demo=False 조건이 직접 작성되어 있지 않아.
+하지만 context_for() 함수에서 이미 실제 브랜드만 조회하고 있을 가능성이 있어.
+따라서 지금 list_context()를 수정하면 안 돼.
+
+=================================
+
+27.context_for() 함수 확인하기
+
+확인결과
+def context_for(request):
+    brands = list(visible_brands()) -> 여기서 visible_brands()라는 함수를 호출
+
+확인한 데이터 흐름정리
+
+home/views.py : index()
+-> brands/views.py: list_context()
+->context_for(): brands = list(visible_brands())
+->visible_brands(): 실제 브랜드만 조회하는지 확인 필요
+
+====================================
+
+28. visible_brands() 함수 확인
+
+def visible_brands():
+    # 실제 브랜드가 들어오면 예시 브랜드를 목록에서 제외합니다.
+    qs = Brand.objects.all()
+    if qs.filter(is_demo=False).exists():
+        qs = qs.filter(is_demo=False)
+    return qs.prefetch_related('annual_stats__regional_stats').order_by('id')
+
+동작 방식은 다음과 같아.
+1. Brand.objects.all() — DB에 있는 전체 브랜드 27개를 조회 대상으로 설정해.
+2. qs.filter(is_demo=False).exists() — 실제 브랜드가 하나라도 있는지 확인해.
+3. qs.filter(is_demo=False) — 실제 브랜드가 존재하므로 더미 브랜드 8개를 제외해.
+4. prefetch_related() — 연도별·지역별 통계도 함께 가져올 수 있도록 준비해.
+5. order_by('id') — 브랜드 ID 순으로 정렬해.
+
+
+현재 사이트 데이터 연결 상태
+구분			상태
+실제 브랜드 19개		사이트 목록 조회 대상
+더미 브랜드 8개		DB에 유지, 목록에서는 제외
+연도별 통계		연결됨
+지역별 통계		연결됨
+창업비용			DB 등록 완료
+평당 매출			DB 등록 완료
+
+다만 창업비용과 평당 매출이 실제 화면에도 올바르게 표시되는지는 추가 확인이 필요
+
+
+==================================
+
+29.Django에서 실제 조회 결과 확인하기
+
+from brands.views import visible_brands
+    ...: 
+    ...: qs = visible_brands()
+    ...: 
+    ...: print('사이트 조회 브랜드 수:', qs.count())
+    ...: print('실제 브랜드 수:', qs.filter(is_demo=False).count())
+    ...: print('더미 브랜드 수:', qs.filter(is_demo=True).count())
+    ...: 
+    ...: for brand in qs:
+    ...:     print(brand.name)
+    ...: 
+사이트 조회 브랜드 수: 19
+실제 브랜드 수: 19
+더미 브랜드 수: 0
+교촌치킨
+비에이치씨(BHC)
+굽네치킨
+비비큐(BBQ)
+처갓집양념치킨
+메가엠지씨커피(MEGA MGC COFFEE)
+컴포즈커피(COMPOSE COFFEE)
+이디야커피
+빽다방
+투썸플레이스
+씨유(CU)
+GS25
+세븐일레븐
+이마트24(emart24)
+에이바헤어
+블루클럽
+XEO HAIR(제오헤어)
+로이드밤
+토리헤어
+
+1. 확인 결과
+확인 항목			예상	실제
+사이트 조회 브랜드		19개	19개
+실제 브랜드		19개	19개
+더미 브랜드		0개	0개
+
+중요한 점은 더미 브랜드가 삭제된 게 아니라, 사이트 목록에서만 제외됐다는 거야.
+
+현재 DB에는 여전히 실제 브랜드 19개와 더미 브랜드 8개가 저장되어 있어.
+
+
+===================================
+
+29. 브랜드별 매장 수와 매출 연결 확인
+
+list_context() 함수에 row = brand_row(brand, context['year'], region) 
+: brand_row() 함수가 브랜드 통계를 가공해서 화면으로 전달하는 역할
+
+
+따라서 
+brand_row() 함수 에 실제 DB에 등록한 통계가 화면에 정확하게 연결되는지 검토할 수 있음
+특히 현재 데이터에는 2026년 일부 항목이 비어 있으므로, 2025년 데이터가 있는데도 2026년의 빈 값이 화면에 표시되는 문제가 없는지도 함께 확인
+
+1. 현재 brand_row() 함수 분석
+실제 DB에 저장한 매장 수, 매출, 평당 매출을 가져오는 기능이 이미 구현
+다만 한 가지 중요한 문제가 발견됐어.
+
+항목			현재 코드	확인 		결과
+연도별 통계		brand.annual_stats.all()	정상
+전국 매장 수		stat.stores		정상
+지역별 매장 수		stat.regional_stats.all()	정상
+월평균 매출		annual_sales_krw / 12	정상
+3.3㎡당 연평균 매출	stat.area_sales		정상
+창업비용			가져오지 않음		별도 확인 필요
+
+예를 들어 교촌치킨의 2025년 데이터를 선택하면, DB에 저장된 매장 수와 매출을 조회하도록 작성되어 있어.
+
+주의할 부분: 기본 선택 연도
+context_for() 함수에
+years.sort(reverse=True)
+
+default_year = 2025
+
+if years:
+    default_year = years[0]
+
+실제 데이터에 2026년 통계가 있으므로 사이트에 처음 접속하면 2026년이 기본으로 선택돼.
+
+그런데 2026년 데이터는 일부 브랜드에만 있고, 매출이나 매장 수가 비어 있는 경우도 있어.
+
+그래서 2025년 데이터가 정상적으로 등록되어 있어도 메인 페이지에는 빈 값이 표시될 수 있어.
+
+오늘 주신 데이터 확인하기
+
+2026년도 데이터가 없는 브랜드는 2026년 데이터 없음 2025년 데이터 라고 표시해주는 건 어떨까?
+특히 브랜드 비교 화면에서는 서로 다른 연도의 데이터를 비교하고 있다는 사실을 반드시 알려줘야 해.
+
+지금은 이 기능을 바로 수정하기보다, 먼저 기존 사이트에서 실제 브랜드 19개의 데이터가 정상적으로 표시되는지 확인하자. 그다음에 연도별 대체 표시 기능을 구현하면 돼.
+===================================
+
+30. 기본 연도를 2026년으로 설정
+brands/views.py의 context_for() 함수
+기존코드에서
+
+years.sort(reverse=True)
+
+default_year = 2025
+if years:
+    default_year = years[0]
+
+수정함
+years.sort(reverse=True)
+
+# 기본 연도는 2026년
+default_year = 2026
+
+# 2026년 데이터가 없으면 가장 최근 연도 선택
+if years and 2026 not in years:
+    default_year = years[0]
+
+이렇게 수정하면 사이트 전체에 2026년 데이터가 하나라도 있을 때 2026년을 기본으로 선택해.
+
+단, 특정 브랜드에 2026년 데이터가 없으면 아직 빈 값이 표시될 수 있어. 이 부분은 지금 수정하지 않을게.
+
+
+===================================
+
+31.실제 DB 데이터 조회 테스트
+
+from brands.models import Brand
+    ...: from brands.views import brand_row
+    ...: 
+    ...: brand = Brand.objects.get(name='교촌치킨')
+    ...: 
+    ...: row = brand_row(brand, 2025)
+    ...: 
+    ...: print('브랜드:', row['brand'].name)
+    ...: print('기준연도:', row['stat'].year if row['stat'] else '없음')
+    ...: print('전국 매장 수:', row['stores'])
+    ...: print('월평균 매출(만원):', row['monthly'])
+    ...: print('3.3㎡당 연평균 매출(만원):', row['per_pyeong_annual'])
+브랜드: 교촌치킨
+기준연도: 2025
+전국 매장 수: 1361
+월평균 매출(만원): 6061
+3.3㎡당 연평균 매출(만원): 3306.8
+
+이 테스트는 사이트 화면을 확인하기 전에 brand_row()가 실제 DB 데이터를 정확하게 가져오는지 검증
+
+
+brand_row() 함수가 실제 DB에 저장된 교촌치킨의 2025년 통계를 정상적으로 가져온다는 것을 확인
+1. 테스트 결과
+항목			조회 결과		상태
+브랜드			교촌치킨		정상
+기준연도			2025년		정상
+전국 매장 수		1,361개		정상
+월평균 매출		6,061만원	정상
+3.3㎡당 연평균 매출	3,306.8만원	정상
+
+2. 현재 데이터 흐름
+SQLite DB: Brand · AnnualStat · AreaSales
+-> brand_row(): 매장 수 · 매출 · 평당 매출 계산
+-> list_context(): 브랜드 목록 데이터 구성
+-> Django HTML 템플릿: 실제 화면 표시 여부는 다음 단계에서 확인
+
+
+===============================
+
+32. 실제 사이트 화면 확인하기
+
+셸 종료
+exit()
+
+32단계. 실제 사이트 화면 확인 결과
+확인 항목		결과				상태
+실제 브랜드 이름	교촌치킨, BHC, 굽네치킨 등		정상
+더미 브랜드 제외	화면에 보이지 않음			정상
+전국 매장 수	교촌치킨 1,361개			정상
+월평균 매출	교촌치킨 6,564만원			추가 확인
+연간 개업·폐업	교촌치킨 각 8개			표시 확인
+데이터가 없는 항목	미제공 표시			정상
+브랜드 이미지	치킨 브랜드에 커피 이미지 표시	수정 필요
+
+==================================
+
+33. 2025년 데이터가 화면에 정상 표시되는지 확인
+현재 주소창에 있는 year=2026을 year=2025로 변경
+
+1. 실제 데이터 연결 확인 결과
+항목		IPython 조회	사이트 화면	결과
+브랜드		교촌치킨		교촌치킨		일치
+기준연도		2025년		2025년		일치
+전국 매장 수	1,361개		1,361개		일치
+평균 월 매출	6,061만원	6,061만원	일치
+
+화면에서 추가로 확인되는 브랜드들도 있어.
+브랜드		2025년 매장 수	평균 월 매출
+BBQ		2,316개		4,239만원
+BHC		2,228개		4,414만원
+교촌치킨		1,361개		6,061만원
+처갓집양념치킨	1,254개		2,656만원
+굽네치킨		1,154개		4,155만원
+
+이제 다음 데이터 흐름이 정상적으로 작동한다는 걸 확인했어.
+
+SQLite DB → Brand/AnnualStat → brand_row() → list_context() → HTML
+
+다만 치킨 브랜드 이미지가 모두 커피 사진으로 표시되는 문제는 남아 있어. 이미지 연결은 나중에 별도로 수정하면 돼.
+
+==============================
+
+34. 브랜드 상세 페이지의 실제 데이터 확인-> 자세히 살펴보기 오류 -> 오류원인 확인
+
+딕셔너리(dict)를 정수(int)로 나누려고 했다
+
+def money(value):
+    return '미제공' if value is None or value == '' else f'{round(value / 10000):,}만원'
+value / 10000 ->숫자는 나눌 수 있지만, 실제 데이터의 costs처럼 딕셔너리 형태라면 나눌 수 없어.
+
+======================================
+
+35.money() 함수 수정
+이전것 주석처리
+
+@register.filter
+def money(value):
+    # 값이 없으면 미제공
+    if value is None or value == '':
+        return '미제공'
+
+    # 딕셔너리는 숫자로 계산할 수 없으므로 별도 처리
+    if isinstance(value, dict):
+        return '미제공'
+
+    # 숫자가 아닌 값도 안전하게 처리
+    try:
+        return f'{round(float(value) / 10000):,}만원'
+    except (TypeError, ValueError):
+        return '미제공'
+
+전달된 값			출력 결과
+130491000		13,049만원
+None			미제공
+''			미제공
+{'가맹비': 10000000}	미제공
+
+주의: 이 수정은 오류를 방지하는 임시 조치야. 딕셔너리 안에 실제 창업비용이 있더라도 미제공으로 표시되므로, 데이터가 정확하게 출력되는 최종 해결 방법은 아니야.
+
+=============================
+
+36. 창업비용이 전달되는 부분 확인
+
+brands/templates/bview.html 파일 확인
+
+==============================
+
+37.costs 데이터가 전달되는 과정 확인
+brands/views.py 파일에서 def bview(request, slug): 함수 확인
+
+costs=brand.costs.items()
+
+실제 브랜드의 brand.costs에는 창업비용 숫자뿐 아니라 연도별 내역, 창업 혜택 등 다른 구조의 데이터도 저장되어 있어.
+그런데 bview.html에서는 모든 항목을 숫자로 취급
+
+{% for name,value in costs %}
+    {{ value|money }}
+{% endfor %}
+그래서 딕셔너리가 money() 필터에 전달되어 오류가 발생
+
+===================================
+
+38. 창업비용 항목만 전달하도록 수정
+
+기존코드
+context.update(page='detail', row=row, brand=brand, regional_rows=regions,
+               top_regions=top_regions, chart=chart, costs=brand.costs.items())
+
+수정 코드
+# 창업비용 중 숫자형 항목만 추출
+cost_items = [
+    (name, value)
+    for name, value in brand.costs.items()
+    if isinstance(value, (int, float)) and not isinstance(value, bool)
+]
+
+context.update(
+    page='detail',
+    row=row,
+    brand=brand,
+    regional_rows=regions,
+    top_regions=top_regions,
+    chart=chart,
+    costs=cost_items
+)
+
+이렇게 하면 숫자가 아닌 딕셔너리가 money() 함수로 전달되지 않으므로 해당 오류를 방지할 수 있어.
+
+다만 이것은 상세 페이지를 정상적으로 열기 위한 임시 수정
+
+하지만 창업비용 영역 오류
+
+======================================
+
+39. 실제 창업비용 JSON 구조 확인하기
+
+디장고 셸에서
+from brands.models import Brand
+   ...:    ...: from pprint import pprint
+   ...:    ...:
+   ...:    ...: brand = Brand.objects.get(name='교촌치킨')
+   ...:    ...:
+   ...:    ...: print(brand.costs)
+{'year': 2025, 'startup_cost_breakdown': {'franchise_fee_krw': 6765000, 'education_fee_krw': 3550000, 'guarantee_deposit_krw': 1000000, 'other_cost_krw': 119176000}, 'history': [{'year': 2024, 'startup_cost_krw': 131006000, 'startup_cost_breakdown': {'franchise_fee_krw': 6765000, 'education_fee_krw': 3550000, 'guarantee_deposit_krw': 1500000, 'other_cost_krw': 119191000}}, {'year': 2025, 'startup_cost_krw': 130491000, 'startup_cost_breakdown': {'franchise_fee_krw': 6765000, 'education_fee_krw': 3550000, 'guarantee_deposit_krw': 1000000, 'other_cost_krw': 119176000}}, {'year': 2026, 'startup_cost_krw': None, 'startup_cost_breakdown': {'franchise_fee_krw': None, 'education_fee_krw': None, 'guarantee_deposit_krw': None, 'other_cost_krw': None}}], 'startup_cost_offers': [{'variant': 'default', 'source_id': '치킨/교촌치킨_창업정보.xlsx#창업비용', 'year': None, 'collected_year': 2026, 'startup_cost_krw': 156530000, 'startup_cost_breakdown': {'franchise_fee_krw': 6760000, 'education_fee_krw': 3900000, 'guarantee_deposit_krw': 10000000, 'interior_cost_krw': 69000000, 'equipment_cost_krw': None, 'other_cost_krw': 66860000}, 'note': '비용 적용연도 미확인. 연도별 공시비용에 강제 덮어쓰기하지 않음. 매장유형·면적·VAT·별도공사는 원문 비고 참조', 'source_rows': [{'항목': '가맹비', '금액(만원)': 676, '금액(원)': 6760000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '교육비', '금액(만원)': 390, '금액(원)': 3900000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '인테리어', '금액(만원)': 6900, '금액(원)': 69000000, '비고': '66㎡(20평) 기준', '근거': '사용자 제공 이미지 #4'}, {'항목': '보증금', '금액(만원)': 1000, '금액(원)': 10000000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '기타', '금액(만원)': 6686, '금액(원)': 66860000, '비고': None, '근거': '사용자 제공 이미지 #4'}, {'항목': '전체(표시값)', '금액(만원)': 15653, '금액(원)': 156530000, '비고': '세부 합계와 1만원 차이', '근거': '사용자 제공 이미지 #4'}, {'항목': '세부 항목 합계(계산)', '금액(만원)': 15652, '금액(원)': 156520000, '비고': '676 + 390 + 6900 + 1000 + 6686', '근거': '사용자 제공 이미지 #4'}, {'항목': '표시 전체 - 세부 합계', '금액(만원)': 1, '금액(원)': 10000, '비고': '원본 값을 그대로 보존. 차이 원인 미확인', '근거': '사용자 제공 이미지 #4'}], 'itemized_total_krw': 156520000}]}
+
+
+이 코드는 교촌치킨의 창업비용 정보를 딕셔너리 형태로 보여줘.
+
+이 결과를 확인하면 가맹비, 교육비, 인테리어비 등이 어느 위치에 저장되어 있는지 알 수 있어.
+
+brand.costs에는 창업비용이 두 종류로 저장되어 있음
+
+1. 실제 창업비용 데이터 확인
+① 2025년 연도별 창업비용
+
+startup_cost_breakdown에 저장된 데이터야.
+항목	금액
+가맹비	676.5만원
+교육비	355만원
+보증금	100만원
+기타 비용	11,917.6만원
+합계	13,049.1만원
+
+② 별도로 수집한 창업비용 견적
+
+startup_cost_offers에 저장되어 있어.
+항목		금액
+가맹비		676만원
+교육비		390만원
+보증금		1,000만원
+인테리어		6,900만원
+기타 비용		6,686만원
+세부 항목 합계	15,652만원
+원본 표시 합계	15,653만원
+
+두 자료는 적용연도와 견적 조건이 동일하다고 확인되지 않았으므로 합치면 안 돼.
+
+지금은 우선 2025년 연도별 창업비용을 상세 페이지에 정확하게 표시하자.
+
+
+=========================================
+40. 창업비용 세부 항목 연결 수정
+brands/views.py의 bview() 함수에서 이전에 추가했던 코드
+
+cost_items = [
+    (name, value)
+    for name, value in brand.costs.items()
+    if isinstance(value, (int, float)) and not isinstance(value, bool)
+]
+수정함
+# 창업비용 항목의 영문 이름을 한글로 변환
+cost_names = {
+    'franchise_fee_krw': '가맹비',
+    'education_fee_krw': '교육비',
+    'guarantee_deposit_krw': '보증금',
+    'interior_cost_krw': '인테리어 비용',
+    'equipment_cost_krw': '설비 비용',
+    'other_cost_krw': '기타 비용',
+}
+
+# 선택한 연도에 해당하는 창업비용 찾기
+cost_history = brand.costs.get('history', [])
+
+selected_cost = next(
+    (item for item in cost_history if item.get('year') == context['year']),
+    None
+)
+
+# 선택 연도 자료가 있으면 해당 세부 비용 사용
+# 기존 더미 브랜드는 기존 비용 구조 유지
+if selected_cost is not None:
+    breakdown = selected_cost.get('startup_cost_breakdown') or {}
+else:
+    breakdown = (
+        brand.costs
+        if brand.is_demo
+        else {}
+    )
+
+# 실제 비용 항목만 추출
+cost_items = [
+    (cost_names.get(name, name), value)
+    for name, value in breakdown.items()
+    if value is not None
+    and isinstance(value, (int, float))
+    and not isinstance(value, bool)
+]
+
+1. 창업비용 연결 확인 결과
+항목		DB 원본		화면 표시		결과
+가맹비		676.5만원	676만원		반올림
+교육비		355만원		355만원		정상
+보증금		100만원		100만원		정상
+기타 비용		11,917.6만원	11,918만원	반올림
+초기 비용 합계	13,049.1만원	13,049만원	반올림
+
+기존에 잘못 표시되던 year 0만원도 사라졌어.
+
+참고로 가맹비의 676.5만원이 676만원으로 나오는 건 Python의 round()가 사용하는 반올림 방식 때문이야. 현재는 오류가 아니지만, 나중에 금액을 소수 첫째 자리까지 표시하도록 개선할 수 있어.
+
+========================================
+
+41. 선택 연도에 맞는 창업비용 합계 표시하기
+
+bview.html에서는 창업비용 합계를 {{ brand.initial_cost_krw|money }}로 표시 
+이 값은 브랜드에 저장된 대표 창업비용
+따라서 사용자가 2024년을 선택해도 2025년 창업비용 합계가 그대로 표시될 수 있음
+이를 해결하기 위해 선택한 연도의 합계를 별도로 전달
+
+① brands/views.py 수정
+bview() 함수에서 앞서 작성한 cost_items 코드 바로 아래에 다음 코드를 추가
+# 선택 연도의 초기 창업비용 합계
+if selected_cost is not None:
+    selected_cost_total = selected_cost.get('startup_cost_krw')
+elif brand.is_demo:
+    selected_cost_total = brand.initial_cost_krw
+else:
+    selected_cost_total = None
+
+context.update()에 cost_total을 추가
+context.update(
+    page='detail',
+    row=row,
+    brand=brand,
+    regional_rows=regions,
+    top_regions=top_regions,
+    chart=chart,
+    costs=cost_items,
+    cost_total=selected_cost_total
+)
+
+② brands/templates/bview.html 수정
+
+<strong>{{ brand.initial_cost_krw|money }}</strong> -> <strong>{{ cost_total|money }}</strong>
+
+이렇게 하면 선택한 연도에 맞는 합계를 표시하게 돼.
+선택 연도		교촌치킨 초기 창업비용
+2024년		13,101만원
+2025년		13,049만원
+2026년		미제공
+
+2026년 창업비용이 없더라도 2025년 값으로 임의 대체하지 않아. 이전 연도 자료를 대신 표시하는 기능은 팀 회의 이후 결정
+
+
+1. 연도별 데이터 연결 확인
+항목		2026년		2025년		2024년
+전국 매장 수	1,361개		1,361개		1,377개
+연간 신규 개업	8개		12개		21개
+연간 폐업		8개		28개		9개
+평균 월 매출	6,564만원	6,061만원	5,786만원
+평당 평균 연매출	미제공		3,306.8만원	3,183만원
+초기 창업비용	미제공		13,049만원	13,101만원
+
+2026년 데이터를 2025년 값으로 임의 대체하지 않은 것도 현재 의도에 맞아
+
+2. 추가로 발견한 확인 사항
+화면에서 두 가지는 나중에 개선할 필요가 있어.
+
+① 2026년 전국 매장 수
+
+2026년과 2025년 모두 1,361개로 표시되고 있어. DB에 실제로 그렇게 저장되어 있다면 코드 문제는 아니지만, 2026년 자료가 일부만 수집된 상태이므로 원본 데이터의 기준을 확인할 필요가 있어.
+
+② 창업비용 기준 면적
+
+현재 화면에는 33.0㎡ 기준으로 표시되고 있어. 하지만 이 값은 Brand.area_sqm의 기본값일 가능성이 있으므로 실제 창업비용의 적용 면적이라고 단정하면 안 돼.
+
+이 부분은 데이터 수집이 완료된 뒤 수정해도 괜찮아.
+
+
+==============================================
+
+42. 교촌치킨의 연도별 매장 수 확인
+2026년 전국 매장 수 1,361개가 실제 2026년 자료인지, 2025년 값이 그대로 들어간 것인지 확인하는 거야.
+
+brand_row()는 선택한 연도의 stat.stores를 그대로 가져오므로, 먼저 DB에 저장된 값과 원본 자료를 비교해야 해.
+
+디장고 셸에
+
+from brands.models import Brand, AnnualStat
+
+brand = Brand.objects.get(name='교촌치킨')
+
+stats = AnnualStat.objects.filter(
+    brand=brand
+).order_by('year')
+
+for stat in stats:
+    print(
+        '연도:', stat.year,
+        '| 전국 매장 수:', stat.stores,
+        '| 신규 개업:', stat.opened,
+        '| 폐업:', stat.closed,
+        '| 지역 데이터 수:', stat.regional_stats.count()
+    )
+
+이 코드로 확인하는 것은 다음과 같아.
+- 2026년 전국 매장 수가 실제 DB에 1361로 저장되어 있는지
+- 2025년과 2026년 데이터가 어떻게 다른지
+- 2026년 지역별 데이터가 정말 없는지
+
+연도: 2024 | 전국 매장 수: 1377 | 신규 개업: 21 | 폐업: 9 | 지역 데이터 수: 17
+연도: 2025 | 전국 매장 수: 1361 | 신규 개업: 12 | 폐업: 28 | 지역 데이터 수: 17
+연도: 2026 | 전국 매장 수: 1361 | 신규 개업: 8 | 폐업: 8 | 지역 데이터 수: 0
+
+- 화면 오류는 아니야. brand_row()가 DB에 저장된 2026년 매장 수 1361을 그대로 표시하고 있어.
+- 2026년 지역별 데이터는 실제로 등록되어 있지 않아.
+- 다만 2026년 전국 매장 수가 2025년과 같은 이유는 아직 확인되지 않았어.
+즉, DB에 값이 있다는 것과 그 값이 실제 2026년 자료라는 것은 별개의 문제-> 데이터 확보필요
+
+
+===========================================
+
+43.boards2. JSON의 2026년 매장 수 확인
+
+import json
+   ...: 
+   ...: with open('data/brands2.json', 'r', encoding='utf-8') as f:
+   ...:     brands_data = json.load(f)
+   ...: 
+   ...: for brand in brands_data:
+   ...:     if brand.get('name') == '교촌치킨':
+   ...:         for history in brand.get('history', []):
+   ...:             print('연도:', history.get('year'))
+   ...:             print('전국 매장 수:', history.get('stores'))
+   ...:             print('신규 개업:', history.get('opened'))
+   ...:             print('폐업:', history.get('closed'))
+   ...:             print('--------------------')
+   ...: 
+연도: 2024
+전국 매장 수: 1377
+신규 개업: 21
+폐업: 9
+--------------------
+연도: 2025
+전국 매장 수: 1361
+신규 개업: 12
+폐업: 28
+--------------------
+연도: 2026
+전국 매장 수: 1361
+신규 개업: 8
+폐업: 8
+--------------------
+
+1. brands2.json과 DB 비교 결과
+연도	brands2.json 매장 수	DB 매장 수	결과
+2024년	1,377개			1,377개		일치
+2025년	1,361개			1,361개		일치
+2026년	1,361개			1,361개		일치
+
+신규 개업과 폐업 수도 세 연도 모두 일치해.
+
+따라서 데이터 연결 과정은 정상적으로 작동하고 있어.
+
+brands2.json → db.sqlite3 → brand_row() → 사이트 화면
+
+
+===================================
+
+44.brands2.json의 2026년 데이터 출처 확인
+for brand in brands_data:
+   ...:     if brand.get('name') == '교촌치킨':
+   ...:         for history in brand.get('history', []):
+   ...:             if history.get('year') == 2026:
+   ...:                 from pprint import pprint
+   ...:                 pprint(history)
+   ...: 
+{'annual_sales_krw': 787680000,
+ 'annual_sales_per_3_3sqm_krw': None,
+ 'annual_sales_status': 'reported_from_monthly',
+ 'closed': 8,
+ 'closed_definition': '原자료 폐점 표기. 계약종료/해지 세부 미제공',
+ 'company': '교촌에프앤비(주)',
+ 'contract_ended': None,
+ 'contract_terminated': None,
+ 'direct_stores': 1,
+ 'monthly_sales_krw': 65640000,
+ 'name': '교촌치킨',
+ 'national_reference': {'annual_sales_krw': 787680000,
+                        'direct_stores': 1,
+                        'sales_status': 'reported_from_monthly',
+                        'stores': 1361,
+                        'total_stores': 1362},
+ 'opened': 8,
+ 'ownership_changed': 97,
+ 'quality_flags': [],
+ 'regions': {},
+ 'source_accounting_year': 2025,
+ 'source_ids': ['치킨/교촌치킨_창업정보.xlsx#연도별 정보'],
+ 'startup_cost_breakdown': {'education_fee_krw': None,
+                            'franchise_fee_krw': None,
+                            'guarantee_deposit_krw': None,
+                            'other_cost_krw': None},
+ 'startup_cost_krw': None,
+ 'stores': 1361,
+ 'total_stores': 1362,
+ 'year': 2026}
+
+
+이 코드는 brands2.json에 들어 있는 교촌치킨의 2026년 전체 통계 정보를 보여줘.
+
+여기에서 출처, 기준연도, 비고 등이 있는지 확인할 거야.
+현재 결론
+- 실제 데이터 연결: 정상
+- 2026년 매장 수 표시: brands2.json에 저장된 값과 일치
+- 2026년 매장 수의 기준연도 신뢰성: 추가 확인 필요
+
+
+2026년 매장 수가 왜 2025년과 동일하게 표시되는지 중요한 단서
+
+1. brands2.json 확인 결과
+2026년 교촌치킨 데이터에서 중요한 항목은 다음과 같아.
+항목			값	의미
+year			2026	데이터에 지정된 연도
+source_accounting_year	2025	자료의 회계 기준연도
+stores			1,361	가맹점 수
+direct_stores		1	직영점 수
+total_stores		1,362	가맹점 + 직영점
+regions			{}	지역별 데이터 없음
+startup_cost_krw		None	창업비용 미제공
+
+2026년 항목에 들어 있는 1,361개는 회계 기준연도가 2025년인 자료야.
+
+따라서 현재 화면에서 단순히 '2026년 전국 매장 수 1,361개'라고 표시하면 사용자가 2026년 기준 수치로 오해할 수 있어.
+
+다만 2026년 항목의 모든 수치가 2025년과 동일하다는 뜻은 아니야. 신규 개업 8개, 폐업 8개 등은 별도로 출처를 확인할 필요가 있어.
+
+
+==========================================
+
+
+45. brands2.json의 2026년 데이터 확인
+
+for brand in brands_data:
+   ...:     for history in brand.get('history', []):
+   ...:         if history.get('year') == 2026:
+   ...:             print(
+   ...:                 '브랜드:', brand.get('name'),
+   ...:                 '| 표시연도:', history.get('year'),
+   ...:                 '| 기준연도:', history.get('source_accounting_year'),
+   ...:                 '| 가맹점:', history.get('stores'),
+   ...:                 '| 직영점:', history.get('direct_stores'),
+   ...:                 '| 전체 매장:', history.get('total_stores')
+   ...:             )
+   ...: 
+브랜드: 교촌치킨 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 1361 | 직영점: 1 | 전체 매장: 1362
+브랜드: 비에이치씨(BHC) | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 2250 | 직영점: 12 | 전체 매장: 2262
+브랜드: 처갓집양념치킨 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: None | 직영점: None | 전체 매장: None
+브랜드: 메가엠지씨커피(MEGA MGC COFFEE) | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 3969 | 직영점: 47 | 전체 매장: 4016
+브랜드: GS25 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 17888 | 직영점: 117 | 전체 매장: 18005
+브랜드: 에이바헤어 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 342 | 직영점: None | 전체 매장: None
+브랜드: 블루클럽 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 334 | 직영점: None | 전체 매장: None
+브랜드: XEO HAIR(제오헤어) | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 46 | 직영점: None | 전체 매장: None
+브랜드: 로이드밤 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 169 | 직영점: None | 전체 매장: None
+브랜드: 토리헤어 | 표시연도: 2026 | 기준연도: 2025 | 가맹점: 153 | 직영점: None | 전체 매장: None
+
+이 코드로 확인할 내용은 세 가지야.
+1. 다른 브랜드도 2026년 데이터의 기준연도가 2025년인지
+2. stores, direct_stores, total_stores가 모두 들어 있는지
+3. 브랜드별로 누락된 데이터가 있는지
+지금은 brands2.json, DB, views.py 모두 수정하지 않을 거야.
+
+2. 확인된 데이터 결과
+brands2.json에서 확인한 내용은 다음과 같아.
+- 2026년 데이터가 있는 브랜드는 10개
+- 10개 모두 source_accounting_year가 2025
+- stores는 가맹점 수
+- direct_stores는 직영점 수
+- total_stores는 전체 매장 수
+- 세 값이 모두 있는 40개 데이터에서 stores + direct_stores = total_stores가 모두 성립
+따라서 brands2.json에 이미 들어 있는 total_stores를 우선 사용
+
+
+===============================================
+
+46. models.py 필드 추가
+
+brands/models.py-> AnnualStat 클래스 안에 추가
+
+direct_stores = models.PositiveIntegerField(null=True, blank=True)
+total_stores = models.PositiveIntegerField(null=True, blank=True)
+
+=======================================
+
+47.DB에 새 필드 반영하기
+
+python manage.py makemigrations
+python manage.py migrate
+
+==========================================
+
+48.brands2.json 데이터를 DB에 추가하기
+brands2.json의 직영점 수와 전체 매장 수를 기존 AnnualStat에 업데이트
+
+import json
+from brands.models import Brand, AnnualStat
+
+with open('data/brands2.json', 'r', encoding='utf-8') as f:
+    brands_data = json.load(f)
+
+updated = 0
+not_found = []
+
+for item in brands_data:
+    brand = Brand.objects.filter(
+        name=item.get('name'),
+        is_demo=False
+    ).first()
+
+    if brand is None:
+        not_found.append(item.get('name'))
+        continue
+
+    for history in item.get('history', []):
+        stat = AnnualStat.objects.filter(
+            brand=brand,
+            year=history.get('year')
+        ).first()
+
+        if stat is None:
+            not_found.append(f"{brand.name} / {history.get('year')}")
+            continue
+
+        stat.direct_stores = history.get('direct_stores')
+        stat.total_stores = history.get('total_stores')
+
+        stat.save(update_fields=['direct_stores', 'total_stores'])
+        updated += 1
+
+print('업데이트한 연도별 통계:', updated)
+print('찾지 못한 데이터:', not_found)
+
+업데이트한 연도별 통계: 48
+찾지 못한 데이터: []
+
+실제 브랜드 19개의 연도별 통계 48개를 모두 찾아서 direct_stores, total_stores 필드를 업데이트했다는 뜻
+기존 더미 브랜드 8개는 수정하지 않았어
+===========================================
+
+49. brands/views.py 수정하기
+
+사용 환경		빈 값 표현
+Python		None
+JSON		null
+SQLite DB	NULL
+
+def brand_row(brand, year, region='전국'):
+    # 선택 연도에 해당하는 통계를 찾습니다. 없으면 None입니다.
+    stat = None
+    for annual in brand.annual_stats.all():
+        if annual.year == year:
+            stat = annual
+            break
+    region_counts = {}
+    monthly = None
+    if stat:
+        for regional in stat.regional_stats.all():
+            region_counts[regional.region] = regional.stores
+        if stat.annual_sales_krw is not None:
+            monthly = round(stat.annual_sales_krw / 12 / 10000)
+    # 전국 매장 수 계산 : 디장고, 파이썬에선 None, json에서는 null
+    if stat and region == '전국':
+        total_stores = stat.total_stores       # brands2.json의 total_stores (전체 매장 수)
+        franchise_stores = stat.stores         # brands2.json의 stores (가맹점 수)
+        direct_stores = stat.direct_stores     # brands2.json의 direct_stores (직영점 수)
+
+        # 전체 매장 수가 None이 아니면 해당 값을 우선 사용
+        if total_stores is not None:
+            stores = total_stores
+
+        # 전체 매장 수가 없고, 가맹점 또는 직영점 수 중 하나라도 값이 있으면 합산
+        # 계산할 때 None은 0으로 취급하지만, DB에 저장된 None은 변경하지 않음
+        elif franchise_stores is not None or direct_stores is not None:
+            stores = (franchise_stores or 0) + (direct_stores or 0)
+
+        # 전체 매장 수, 가맹점 수, 직영점 수가 모두 없으면 None
+        else:
+            stores = None
+
+    # 전국이 아닌 경우 기존 지역별 가맹점 수 사용
+    else:
+        stores = region_counts.get(region)
+    try:
+        area_record = stat.area_sales if stat else None
+    except ObjectDoesNotExist:
+        area_record = None
+    per_pyeong = area_record.annual_sales_per_pyeong_krw if area_record else None
+    return {'brand': brand, 'stat': stat, 'monthly': monthly, 'stores': stores, 'region_counts': region_counts,
+            'area_pyeong': round(brand.area_sqm / 3.305785, 1),
+            'reference_per_pyeong': round(stat.annual_sales_krw / 12 / 10000 / (brand.area_sqm / 3.305785), 2) if stat and stat.annual_sales_krw is not None and brand.area_sqm > 0 else None,
+            'per_pyeong_annual': round(per_pyeong / 10000, 2) if per_pyeong is not None else None,
+            'per_pyeong_monthly': round(per_pyeong / 12 / 10000, 2) if per_pyeong is not None else None,
+            'area_source': area_record.source_label if area_record else ''}
+
+로 변경
+
+
+==================================
+
+50. 실제 DB와 brand_row()가 제대로 연결되었는지 확인
+
+from brands.models import Brand
+   ...: from brands.views import brand_row
+   ...: 
+   ...: for name in ['교촌치킨', '비에이치씨(BHC)', '에이바헤어']:
+   ...:     brand = Brand.objects.get(name=name)
+   ...:     row = brand_row(brand, 2026)
+   ...:     print(name, '| 화면에 표시할 매장 수:', row['stores'])
+   ...: 
+교촌치킨 | 화면에 표시할 매장 수: 1362
+비에이치씨(BHC) | 화면에 표시할 매장 수: 2262
+에이바헤어 | 화면에 표시할 매장 수: 342
+
+==================================
+51.실제 사이트에서 확인
+
+전국 매장 수가 1,362개로 표시됨-> 정상작동
+brands2.json → Django DB → brands/views.py → HTML 화면까지 데이터가 연결된 상태
+
+========================================
+
+52. 선택연도에 따라 문구 자동 변경

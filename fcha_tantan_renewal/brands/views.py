@@ -10,6 +10,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_POST
 from .models import Brand
 from .constants import REGIONS
+from .models import StartupCost
 
 
 def visible_brands():
@@ -22,13 +23,13 @@ def visible_brands():
 
 def context_for(request):
     # 여러 화면에서 함께 사용하는 연도, 비교함, 관심 목록입니다.
-    brands = list(visible_brands())
+    brands = list(visible_brands()) # 실제 브랜드 조회는 visible_brands()에서 결정
     stats = []
     years = []
     available = []
     sources = []
     updated_at = ''
-    is_demo = bool(brands)
+    is_demo = bool(brands) # 브랜드를 필터링하는 기능이 아님, 화면에 전달할 상태값을 계산하는 용도
     for brand in brands:
         available.append(brand.slug)
         if not brand.is_demo:
@@ -42,8 +43,11 @@ def context_for(request):
             if updated_at == '' or stat.updated_at > updated_at:
                 updated_at = stat.updated_at
     years.sort(reverse=True)
-    default_year = 2025
-    if years:
+
+    # 기본 연도는 2026년
+    default_year = 2026
+    # 2026년 데이터가 없으면 가장 최근 연도 선택
+    if years and 2026 not in years:
         default_year = years[0]
     try:
         year = int(request.GET.get('year', default_year))
@@ -99,8 +103,26 @@ def brand_row(brand, year, region='전국'):
             region_counts[regional.region] = regional.stores
         if stat.annual_sales_krw is not None:
             monthly = round(stat.annual_sales_krw / 12 / 10000)
+    # 전국 매장 수 계산 : 디장고, 파이썬에선 None, json에서는 null
     if stat and region == '전국':
-        stores = stat.stores
+        total_stores = stat.total_stores       # brands2.json의 total_stores (전체 매장 수)
+        franchise_stores = stat.stores         # brands2.json의 stores (가맹점 수)
+        direct_stores = stat.direct_stores     # brands2.json의 direct_stores (직영점 수)
+
+        # 전체 매장 수가 None이 아니면 해당 값을 우선 사용
+        if total_stores is not None:
+            stores = total_stores
+
+        # 전체 매장 수가 없고, 가맹점 또는 직영점 수 중 하나라도 값이 있으면 합산
+        # 계산할 때 None은 0으로 취급하지만, DB에 저장된 None은 변경하지 않음
+        elif franchise_stores is not None or direct_stores is not None:
+            stores = (franchise_stores or 0) + (direct_stores or 0)
+
+        # 전체 매장 수, 가맹점 수, 직영점 수가 모두 없으면 None
+        else:
+            stores = None
+
+    # 전국이 아닌 경우 기존 지역별 가맹점 수 사용
     else:
         stores = region_counts.get(region)
     try:
@@ -136,7 +158,7 @@ def list_context(request, saved_only=False):
             continue
         if category != '전체' and brand.category != category:
             continue
-        row = brand_row(brand, context['year'], region)
+        row = brand_row(brand, context['year'], region) # brand_row() 함수가 브랜드 통계를 가공해서 화면으로 전달하는 역할
         if region != '전국' and not row['stores']:
             continue
         rows.append(row)
@@ -158,7 +180,7 @@ def list_context(request, saved_only=False):
             return v
         rows.sort(key=value, reverse=True)
     context.update(rows=rows, query=query, category=category, region=region, sort=sort,
-                   saved_only=saved_only, page='saved' if saved_only else 'list')
+                saved_only=saved_only, page='saved' if saved_only else 'list')
     return context
 
 
@@ -189,10 +211,88 @@ def bview(request, slug):
     chart = [{'year': s.year, 'opened': s.opened, 'closed': s.closed,
               'opened_height': round((s.opened or 0) / maximum * 85, 2),
               'closed_height': round((s.closed or 0) / maximum * 85, 2)} for s in trend]
-    context.update(page='detail', row=row, brand=brand, regional_rows=regions,
-                   top_regions=top_regions, chart=chart, costs=brand.costs.items())
-    return render(request, 'bview.html', context)
+    # 창업비용 항목의 영문 이름을 한글로 변환
+    cost_names = {
+        'franchise_fee_krw': '가맹비',
+        'education_fee_krw': '교육비',
+        'guarantee_deposit_krw': '보증금',
+        'interior_cost_krw': '인테리어 비용',
+        'equipment_cost_krw': '설비 비용',
+        'other_cost_krw': '기타 비용',
+    }
 
+    # 선택한 연도에 해당하는 창업비용 찾기
+    cost_history = brand.costs.get('history', [])
+
+    selected_cost = next(
+        (item for item in cost_history if item.get('year') == context['year']),
+        None
+    )
+
+    # 선택 연도 자료가 있으면 해당 세부 비용 사용
+    # 기존 더미 브랜드는 기존 비용 구조 유지
+    if selected_cost is not None:
+        breakdown = selected_cost.get('startup_cost_breakdown') or {}
+    else:
+        breakdown = (
+            brand.costs
+            if brand.is_demo
+            else {}
+        )
+
+    # 실제 비용 항목만 추출
+    cost_items = [
+        (cost_names.get(name, name), value)
+        for name, value in breakdown.items()
+        if value is not None
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ]
+    # 선택 연도의 초기 창업비용 합계
+    if selected_cost is not None:
+        selected_cost_total = selected_cost.get('startup_cost_krw')
+    elif brand.is_demo:
+        selected_cost_total = brand.initial_cost_krw
+    else:
+        selected_cost_total = None
+
+    # -------------------------------------------------
+    # 신규 StartupCost 데이터 연결
+    # 2024~2025년 신규 데이터 우선 사용
+    # 신규 데이터가 없으면 기존 Brand.costs 유지
+    # -------------------------------------------------
+    # 출처 정보 초기화
+    cost_source = None
+
+    new_costs = StartupCost.objects.filter(
+        brand=brand,
+        year=context['year']
+    ).select_related('item').order_by(
+        'item__display_order'
+    )
+    
+    # 신규 데이터가 존재할 경우
+    if new_costs.exists():
+        # 신규 데이터가 사용되면 출처 정보 저장
+        cost_source = "priority_brands.json (19개 브랜드 추출 자료) · 원자료 검증 필요"
+        # 기존 HTML에서 사용하는 (항목명, 금액) 구조
+        cost_items = [
+            (cost.item.name, cost.amount_krw)
+            for cost in new_costs
+        ]
+
+        # 총창업비용 계산
+        amounts = [cost.amount_krw for cost in new_costs]
+
+        if all(amount is not None for amount in amounts):
+            selected_cost_total = sum(amounts)
+        else:
+            selected_cost_total = None
+
+
+    context.update(page='detail', row=row, brand=brand, regional_rows=regions,
+            top_regions=top_regions, chart=chart, costs=cost_items, cost_total=selected_cost_total,cost_source=cost_source)
+    return render(request, 'bview.html', context)
 
 def selected_rows(context):
     rows = []
@@ -206,12 +306,67 @@ def selected_rows(context):
 def bcompare(request):
     context = context_for(request)
     rows = selected_rows(context)
+    # 선택한 브랜드의 연도별 창업비용 조회
+
+    startup_cost_totals = []
+
+    for row in rows:
+        brand = row['brand']
+        year = context['year']
+
+        costs = list(
+            StartupCost.objects.filter(
+                brand=brand,
+                year=year
+            ).values_list('item__code', 'amount_krw')
+        )
+
+        # 신규 데이터가 있을 때
+        if costs:
+            amounts = dict(costs)
+
+            required_codes = {
+                'franchise_fee_krw',
+                'education_fee_krw',
+                'guarantee_deposit_krw',
+                'other_cost_krw',
+            }
+
+            # 필수 항목 4개가 모두 있고 금액이 NULL이 아닌 경우
+            if required_codes.issubset(amounts) and all(
+                amounts[code] is not None
+                for code in required_codes
+            ):
+                total = sum(amounts[code] for code in required_codes)
+                startup_cost_totals.append(round(total / 10000))
+            else:
+                startup_cost_totals.append(None)
+
+        # 신규 데이터가 없는 경우 기존 연도별 데이터 사용
+        else:
+            history = brand.costs.get('history', [])
+            selected = next(
+                (item for item in history if item.get('year') == year),
+                None
+            )
+
+            if selected is not None:
+                total = selected.get('startup_cost_krw')
+            elif brand.is_demo:
+                total = brand.initial_cost_krw
+            else:
+                total = None
+
+            startup_cost_totals.append(
+                round(total / 10000) if total is not None else None
+            )
     comparisons = [
         ('연말 매장 수', [r['stores'] for r in rows], '개'),
         ('연간 신규 개업', [r['stat'].opened if r['stat'] else None for r in rows], '개'),
         ('연간 폐업', [r['stat'].closed if r['stat'] else None for r in rows], '개'),
         ('평균 월 매출', [r['monthly'] for r in rows], '만원'),
-        ('창업비용 (만원)', [round(r['brand'].initial_cost_krw / 10000) if r['brand'].initial_cost_krw is not None else None for r in rows], '만원'),
+        # 창업비용 부분만 변경
+        ('창업비용 (만원)', startup_cost_totals, '만원'),
         ('평당 평균 연매출', [r['per_pyeong_annual'] for r in rows], '만원/평·년'),
         ('평당 평균 월매출', [r['per_pyeong_monthly'] for r in rows], '만원/평·월'),
         ('기준 면적 환산 월매출', [r['reference_per_pyeong'] for r in rows], '만원/평·월'),
@@ -221,7 +376,7 @@ def bcompare(request):
     # Each metric has its own unit/scale; unlike units are never drawn on a shared axis.
     metrics = [{'id': str(i), 'label': label, 'values': values, 'unit': unit} for i, (label, values, unit) in enumerate(comparisons)]
     context.update(page='compare', rows=rows, comparisons=comparisons, comparison_metrics=metrics,
-                   comparison_data={'brands': [r['brand'].name for r in rows], 'metrics': metrics})
+                comparison_data={'brands': [r['brand'].name for r in rows], 'metrics': metrics})
     return render(request, 'bcompare.html', context)
 
 
@@ -290,17 +445,143 @@ def saved_toggle(request, slug):
 @require_GET
 def compare_csv(request):
     context = context_for(request)
+
     response = HttpResponse(content_type='text/csv; charset=utf-8')
-    response['Content-Disposition'] = f'attachment; filename="tantan_compare_{context["year"]}.csv"'
-    response.write('﻿')
+    response['Content-Disposition'] = (f'attachment; filename="tantan_compare_{context["year"]}.csv"')
+
+    # 엑셀 한글 깨짐 방지
+    response.write('\ufeff')
     writer = csv.writer(response)
-    writer.writerow(['데이터 구분', '기준연도', '브랜드', '전국 매장 수', '연간 개업 수', '연간 폐업 수', '평균 월 매출(만원)', '창업비용(원)', '평당 평균 연매출(만원/평·년)', '평당 평균 월매출(만원/평·월)'])
+    writer.writerow(['데이터 구분','기준연도','브랜드','전국 매장 수','연간 개업 수','연간 폐업 수','평균 월 매출(만원)','창업비용(원)','평당 평균 연매출(만원/평·년)','평당 평균 월매출(만원/평·월)'])
+
     def safe(value):
         text = str(value) if value is not None else ''
-        return "'" + text if text.lstrip().startswith(('=', '+', '-', '@')) else text
+        return "'" + text if text.lstrip().startswith(
+            ('=', '+', '-', '@')
+        ) else text
+
+    # 선택한 브랜드 목록
     for row in selected_rows(context):
+
+        brand = row['brand']
+        year = context['year']
         s = row['stat']
-        values = ['가상 예시' if row['brand'].is_demo else '실제 데이터', context['year'], row['brand'].name,
-                  row['stores'], s.opened if s else None, s.closed if s else None, row['monthly'], row['brand'].initial_cost_krw, row['per_pyeong_annual'], row['per_pyeong_monthly']]
+
+        # 1. 신규 StartupCost 조회
+        costs = list(
+            StartupCost.objects.filter(brand=brand,year=year).values_list('item__code', 'amount_krw'))
+        startup_cost_krw = None
+
+        # 2. 신규 데이터가 있는 경우
+        if costs:
+            amounts = dict(costs)
+
+            required_codes = {'franchise_fee_krw','education_fee_krw','guarantee_deposit_krw','other_cost_krw'}
+
+            if (len(costs) == len(required_codes) and required_codes.issubset(amounts) 
+                and all(amounts[code] is not None for code in required_codes)):
+                startup_cost_krw = sum(amounts[code] for code in required_codes)
+
+        # 3. 신규 데이터가 없는 경우 기존 데이터 사용
+        else:
+            history = (brand.costs or {}).get('history', [])
+
+            selected = next(
+                (
+                    item for item in history
+                    if item.get('year') == year
+                ),
+                None
+            )
+
+            if selected is not None:
+                startup_cost_krw = selected.get(
+                    'startup_cost_krw'
+                )
+
+            elif brand.is_demo:
+                startup_cost_krw = brand.initial_cost_krw
+
+        # 4. CSV 한 행 작성
+        values = [
+            '가상 예시' if brand.is_demo else '실제 데이터',
+            year,
+            brand.name,
+            row['stores'],
+            s.opened if s else None,
+            s.closed if s else None,
+            row['monthly'],
+            startup_cost_krw,
+            row['per_pyeong_annual'],
+            row['per_pyeong_monthly']
+        ]
+
         writer.writerow([safe(v) for v in values])
+
     return response
+
+
+#  데이터 변경 확인하면서 추가 진행
+
+# 창업비용 조회 API
+@require_GET
+def startup_cost_api(request, slug):
+    from django.http import JsonResponse
+    from .models import StartupCost
+
+    # 브랜드 조회
+    brand = get_object_or_404(
+        Brand.objects.filter(is_demo=False),
+        slug=slug
+    )
+
+    # 조회 연도 확인
+    try:
+        year = int(request.GET.get('year', '2025'))
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {'error': '연도는 숫자로 입력해야 합니다.'},
+            status=400
+        )
+
+    # 해당 브랜드, 해당 연도의 창업비용 조회
+    costs = StartupCost.objects.filter(
+        brand=brand,
+        year=year
+    ).select_related('item', 'source').order_by(
+        'item__display_order'
+    )
+
+    # 데이터가 없는 연도
+    if not costs.exists():
+        return JsonResponse({
+            'brand': brand.name,
+            'slug': brand.slug,
+            'year': year,
+            'total_cost_krw': None,
+            'items': {},
+            'message': '해당 연도의 창업비용 데이터가 없습니다.'
+        })
+
+    items = {}
+    total = 0
+    has_missing = False
+
+    for cost in costs:
+        amount = cost.amount_krw
+
+        items[cost.item.code] = amount
+
+        if amount is None:
+            has_missing = True
+        else:
+            total += amount
+
+    return JsonResponse({
+        'brand': brand.name,
+        'slug': brand.slug,
+        'year': year,
+        'total_cost_krw': None if has_missing else total,
+        'items': items,
+        'source': 'priority_brands.json (19-brand category extract)'
+    })

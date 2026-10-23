@@ -15,4 +15,6 @@ urlpatterns = [
     path('compare/clear/', views.compare_clear, name='compare_clear'),
     path('saved/toggle/<slug:slug>/', views.saved_toggle, name='saved_toggle'),
     path('compare/csv/', views.compare_csv, name='compare_csv'),
+    # 창업비용 조회 API
+    path('api/startup-cost/<slug:slug>/', views.startup_cost_api, name='startup_cost_api'),
 ]

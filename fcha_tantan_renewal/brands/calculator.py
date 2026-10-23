@@ -4,6 +4,8 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from .views import context_for, brand_row
+from .models import StartupCost
+
 
 class CalculatorForm(forms.Form):
     brand = forms.ChoiceField(label='기준 브랜드')
@@ -50,7 +52,55 @@ def calculator(request):
     if row:
         if row['stat'] and row['stat'].annual_sales_krw is not None:
             initial['sales'] = int((Decimal(row['stat'].annual_sales_krw) / 12 / 10000).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
-        if brand.initial_cost_krw is not None: initial['investment'] = int((Decimal(brand.initial_cost_krw) / 10000).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+            # 1. 선택한 브랜드와 연도의 신규 창업비용 조회
+            costs = list(
+                StartupCost.objects.filter(
+                    brand=brand,
+                    year=context['year']
+                ).values_list('item__code', 'amount_krw')
+            )
+
+            investment_krw = None
+
+            # 2. 신규 데이터가 존재하면 4개 항목 합산
+            if costs:
+                amounts = dict(costs)
+
+                required_codes = {
+                    'franchise_fee_krw',
+                    'education_fee_krw',
+                    'guarantee_deposit_krw',
+                    'other_cost_krw'
+                }
+
+                if required_codes.issubset(amounts) and all(
+                    amounts[code] is not None for code in required_codes
+                ):
+                    investment_krw = sum(
+                        amounts[code] for code in required_codes
+                    )
+
+            # 3. 신규 데이터가 없을 경우 기존 연도별 데이터 사용
+            else:
+                history = brand.costs.get('history', [])
+                selected = next(
+                    (item for item in history if item.get('year') == context['year']),
+                    None
+                )
+
+                if selected is not None:
+                    investment_krw = selected.get('startup_cost_krw')
+                elif brand.is_demo:
+                    investment_krw = brand.initial_cost_krw
+
+            # 4. 원 단위를 만원 단위로 변환
+            if investment_krw is not None:
+                initial['investment'] = int(
+                    (Decimal(investment_krw) / 10000).quantize(
+                        Decimal('1'),
+                        rounding=ROUND_HALF_UP
+                    )
+                )
     form = CalculatorForm(request.POST if request.method == 'POST' else None, initial=initial, choices=choices)
     result = calculate(form.cleaned_data) if request.method == 'POST' and form.is_valid() else None
     context.update(page='calculator', form=form, result=result, calculator_brand=brand, row=row)
